@@ -8,6 +8,8 @@
 
 The Mandela compiler is written in Mandela itself.
 
+English | [Русский](README.md)
+
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 [![Stage](https://img.shields.io/badge/stage-v0.1%20bootstrap-orange.svg)]()
 [![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen.svg)](tests/run_tests.sh)
