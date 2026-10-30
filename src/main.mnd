@@ -34,6 +34,14 @@ def dbg_sexpr(n: list[str]) -> str:
         for st in n[4]:
             s = s + " " + dbg_sexpr(st)
         return s + ")"
+    if tag == "struct":
+        let mut s = "(struct " + n[1] + " (fields"
+        for f in n[2]:
+            s = s + " (" + f[0] + " " + f[1] + ")"
+        s = s + ")"
+        for m in n[3]:
+            s = s + " " + dbg_sexpr(m)
+        return s + ")"
     if tag == "let":
         let mut s = "(let " + n[1]
         if n[4]:
@@ -92,6 +100,13 @@ def dbg_sexpr(n: list[str]) -> str:
         return s + ")"
     if tag == "index":
         return "(" + dbg_sexpr(n[1]) + "[" + dbg_sexpr(n[2]) + "])"
+    if tag == "field":
+        return "(. " + dbg_sexpr(n[1]) + " " + n[2] + ")"
+    if tag == "slit":
+        let mut s = "(#" + n[1]
+        for f in n[2]:
+            s = s + " (" + f[0] + " " + dbg_sexpr(f[1]) + ")"
+        return s + ")"
     if tag == "bin":
         return "(" + n[1] + " " + dbg_sexpr(n[2]) + " " + dbg_sexpr(n[3]) + ")"
     if tag == "un":
