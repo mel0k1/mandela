@@ -6,7 +6,7 @@ HOST="$ROOT/bootstrap/mandela.py"
 SRCS=("$ROOT/src/err.mnd" "$ROOT/src/lexer.mnd" "$ROOT/src/parser.mnd" "$ROOT/src/checker.mnd" "$ROOT/src/main.mnd")
 
 usage() {
-    echo "Mandela v0.1"
+    echo "Mandela v0.2"
     echo "usage: mandela <run|check|lex|ast> <file.mnd> [args...]"
 }
 
