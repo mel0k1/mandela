@@ -1,4 +1,5 @@
 let mut c_funcs = []
+let mut c_structs = []
 let mut c_errs = []
 let mut c_warns = []
 let mut c_scopes = [[]]
@@ -26,11 +27,37 @@ def ck_find_fn(name: str) -> list[str]:
         i = i + 1
     return nil
 
+def ck_find_struct(name: str) -> list[str]:
+    for s in c_structs:
+        if s[0] == name:
+            return s
+    return nil
+
+def ck_find_field(sd: list[str], fname: str) -> str:
+    for f in sd[1]:
+        if f[0] == fname:
+            return f[1]
+    return nil
+
+def ck_find_method(sd: list[str], mname: str) -> list[str]:
+    for m in sd[2]:
+        if m[0] == mname:
+            return m
+    return nil
+
+def ck_in_list(lst: list[str], s: str) -> bool:
+    for x in lst:
+        if x == s:
+            return true
+    return false
+
 def ck_err(code: str, msg: str, line: int, col: int):
     push(c_errs, fmt_error("error", code, msg, line, col))
 
 def ck_valid_type(t: str) -> bool:
     if t == "int" or t == "str" or t == "bool" or t == "nil":
+        return true
+    if ck_find_struct(t) != nil:
         return true
     if len(t) >= 7 and substr(t, 0, 5) == "list[" and substr(t, len(t) - 1, 1) == "]":
         return ck_valid_type(substr(t, 5, len(t) - 6))
@@ -65,14 +92,22 @@ def ck_node_pos(n: list[str]) -> list[int]:
 
 def check_program(ast: list[str]) -> int:
     c_funcs = []
+    c_structs = []
     c_errs = []
     c_warns = []
     c_scopes = [[]]
     c_loop = 0
     c_fn = false
     for it in ast[1]:
+        if it[0] == "struct":
+            ck_collect_struct(it)
+    for it in ast[1]:
         if it[0] == "def":
             ck_collect_fn(it)
+    for it in ast[1]:
+        if it[0] == "struct":
+            for m in ck_find_struct(it[1])[2]:
+                ck_method(it[1], m)
     for it in ast[1]:
         if it[0] == "def":
             ck_fn(it)
@@ -87,17 +122,62 @@ def check_program(ast: list[str]) -> int:
 
 def ck_collect_fn(d: list[str]):
     let name = d[1]
-    if ck_find_fn(name) != nil or ck_is_builtin(name):
+    if ck_find_fn(name) != nil or ck_is_builtin(name) or ck_find_struct(name) != nil:
         ck_err("E0428", "the name `" + name + "` is defined multiple times", d[5], d[6])
         return
+    if len(d[2]) > 0 and d[2][0][0] == "self":
+        ck_err("E0424", "`self` parameter is only allowed in methods", d[2][0][2], d[2][0][3])
     let mut ptypes = []
     for p in d[2]:
-        if not ck_valid_type(p[1]):
+        if p[1] != "" and not ck_valid_type(p[1]):
             ck_err("E0412", "cannot find type `" + p[1] + "` in this scope", p[2], p[3])
         push(ptypes, p[1])
     if d[3] != "" and not ck_valid_type(d[3]):
         ck_err("E0412", "cannot find type `" + d[3] + "` in this scope", d[5], d[6])
     push(c_funcs, [name, ptypes, d[3]])
+
+def ck_collect_struct(d: list[str]):
+    let name = d[1]
+    if ck_find_struct(name) != nil or ck_find_fn(name) != nil or ck_is_builtin(name):
+        ck_err("E0428", "the name `" + name + "` is defined multiple times", d[4], d[5])
+        return
+    push(c_structs, [name, [], []])
+    let sd = c_structs[len(c_structs) - 1]
+    for f in d[2]:
+        if not ck_valid_type(f[1]):
+            ck_err("E0412", "cannot find type `" + f[1] + "` in this scope", f[2], f[3])
+        if ck_find_field(sd, f[0]) != nil:
+            ck_err("E0124", "field `" + f[0] + "` is already declared", f[2], f[3])
+        else:
+            push(sd[1], [f[0], f[1]])
+    for m in d[3]:
+        ck_collect_method(name, sd, m)
+
+def ck_collect_method(sname: str, sd: list[str], m: list[str]):
+    let mname = m[1]
+    if ck_find_method(sd, mname) != nil:
+        ck_err("E0592", "duplicate definitions with name `" + mname + "` for struct `" + sname + "`", m[5], m[6])
+        return
+    let mut ptypes = []
+    let mut self_mut = false
+    let mut i = 0
+    while i < len(m[2]):
+        let p = m[2][i]
+        if i == 0 and p[0] == "self":
+            self_mut = p[4]
+            if p[1] != "" and p[1] != sname:
+                ck_err("E0308", "mismatched `self` type: expected `" + sname + "`, found `" + p[1] + "`", p[2], p[3])
+            push(ptypes, sname)
+        else:
+            if i == 0:
+                ck_err("E0424", "first parameter of a method must be `self`", p[2], p[3])
+            if not ck_valid_type(p[1]):
+                ck_err("E0412", "cannot find type `" + p[1] + "` in this scope", p[2], p[3])
+            push(ptypes, p[1])
+        i = i + 1
+    if m[3] != "" and not ck_valid_type(m[3]):
+        ck_err("E0412", "cannot find type `" + m[3] + "` in this scope", m[5], m[6])
+    push(sd[2], [mname, ptypes, m[3], self_mut, m])
 
 def ck_fn(d: list[str]):
     c_fn = true
@@ -112,6 +192,28 @@ def ck_fn(d: list[str]):
     pop(c_scopes)
     if c_ret != "" and c_ret != "nil" and c_retc == 0:
         push(c_warns, fmt_error("warning", "", "function `" + d[1] + "` is declared to return `" + c_ret + "` but has no `return`", d[5], d[6]))
+    c_fn = false
+
+def ck_method(sname: str, m: list[str]):
+    let d = m[4]
+    c_fn = true
+    c_ret = m[2]
+    c_retc = 0
+    push(c_scopes, [])
+    let mut pi = 0
+    while pi < len(d[2]):
+        let p = d[2][pi]
+        if pi == 0 and p[0] == "self":
+            ck_declare(p[0], sname, m[3], "parameter", p[2], p[3])
+        else:
+            ck_declare(p[0], p[1], true, "parameter", p[2], p[3])
+        pi = pi + 1
+    for s in d[4]:
+        ck_stmt(s)
+    ck_unused()
+    pop(c_scopes)
+    if c_ret != "" and c_ret != "nil" and c_retc == 0:
+        push(c_warns, fmt_error("warning", "", "method `" + m[0] + "` is declared to return `" + c_ret + "` but has no `return`", d[5], d[6]))
     c_fn = false
 
 def ck_stmt(node: list[str]):
@@ -192,6 +294,8 @@ def ck_assign(node: list[str]):
             lit[len(lit) - 1] = e[1]
         elif rt != e[1]:
             ck_err("E0308", "mismatched types: expected `" + e[1] + "`, found `" + rt + "`", target[2], target[3])
+    elif target[0] == "field":
+        ck_assign_field(node, target)
     else:
         let bt = ck_expr(target[1])
         let it = ck_expr(target[2])
@@ -209,6 +313,27 @@ def ck_assign(node: list[str]):
                 lit[len(lit) - 1] = et
             elif rt != et:
                 ck_err("E0308", "mismatched types: expected `" + et + "`, found `" + rt + "`", target[3], target[4])
+
+def ck_assign_field(node: list[str], target: list[str]):
+    let bt = ck_expr(target[1])
+    if target[1][0] == "var":
+        let e = ck_lookup(target[1][1])
+        if e != nil and not e[2]:
+            ck_err("E0384", "cannot assign to `" + target[1][1] + "." + target[2] + "`, as `" + target[1][1] + "` is not declared as mutable", target[1][2], target[1][3])
+    let rt = ck_expr(node[2])
+    let sd = ck_find_struct(bt)
+    if sd == nil:
+        ck_err("E0609", "no field `" + target[2] + "` on type `" + bt + "`", target[3], target[4])
+        return
+    let ft = ck_find_field(sd, target[2])
+    if ft == nil:
+        ck_err("E0609", "no field `" + target[2] + "` on type `" + bt + "`", target[3], target[4])
+        return
+    if rt == "list[_]":
+        let lit = node[2]
+        lit[len(lit) - 1] = ft
+    elif rt != ft:
+        ck_err("E0308", "mismatched types: expected `" + ft + "`, found `" + rt + "`", target[3], target[4])
 
 def ck_return(node: list[str]):
     c_retc = c_retc + 1
@@ -275,6 +400,21 @@ def ck_expr(node: list[str]) -> str:
         t = ck_list(node)
     elif tag == "call":
         t = ck_call(node)
+    elif tag == "field":
+        let bt = ck_expr(node[1])
+        let sd = ck_find_struct(bt)
+        if sd == nil:
+            ck_err("E0609", "no field `" + node[2] + "` on type `" + bt + "`", node[3], node[4])
+            t = "int"
+        else:
+            let ft = ck_find_field(sd, node[2])
+            if ft == nil:
+                ck_err("E0609", "no field `" + node[2] + "` on type `" + bt + "`", node[3], node[4])
+                t = "int"
+            else:
+                t = ft
+    elif tag == "slit":
+        t = ck_slit(node)
     elif tag == "index":
         let bt = ck_expr(node[1])
         let it = ck_expr(node[2])
@@ -350,10 +490,92 @@ def ck_bool_arg(node: list[str]):
         let pos = ck_node_pos(node)
         ck_err("E0308", "mismatched types: expected `bool`, found `" + t + "`", pos[0], pos[1])
 
+def ck_slit(node: list[str]) -> str:
+    let name = node[1]
+    let sd = ck_find_struct(name)
+    if sd == nil:
+        ck_err("E0412", "cannot find type `" + name + "` in this scope", node[3], node[4])
+        for f in node[2]:
+            ck_expr(f[1])
+        return "int"
+    let mut given = []
+    for f in node[2]:
+        let ft = ck_find_field(sd, f[0])
+        if ft == nil:
+            ck_err("E0560", "struct `" + name + "` has no field named `" + f[0] + "`", f[2], f[3])
+            ck_expr(f[1])
+        elif ck_in_list(given, f[0]):
+            ck_err("E0062", "field `" + f[0] + "` specified more than once", f[2], f[3])
+            ck_expr(f[1])
+        else:
+            push(given, f[0])
+            let rt = ck_expr(f[1])
+            if rt == "list[_]":
+                let lit = f[1]
+                lit[len(lit) - 1] = ft
+            elif rt != ft:
+                ck_err("E0308", "mismatched types: expected `" + ft + "`, found `" + rt + "`", f[2], f[3])
+    let mut miss = []
+    for sf in sd[1]:
+        if not ck_in_list(given, sf[0]):
+            push(miss, "`" + sf[0] + "`")
+    if len(miss) == 1:
+        ck_err("E0063", "missing field " + miss[0] + " in initializer for `" + name + "`", node[3], node[4])
+    elif len(miss) > 1:
+        let mut names = miss[0]
+        let mut i = 1
+        while i < len(miss):
+            names = names + ", " + miss[i]
+            i = i + 1
+        ck_err("E0063", "missing fields " + names + " in initializer for `" + name + "`", node[3], node[4])
+    return name
+
+def ck_method_call(node: list[str], fnode: list[str]) -> str:
+    let args = node[2]
+    let pos = [node[3], node[4]]
+    let rt = ck_expr(fnode[1])
+    let sd = ck_find_struct(rt)
+    let m = nil
+    if sd == nil:
+        ck_err("E0599", "no method named `" + fnode[2] + "` found for type `" + rt + "`", fnode[3], fnode[4])
+    else:
+        m = ck_find_method(sd, fnode[2])
+        if m == nil:
+            ck_err("E0599", "no method named `" + fnode[2] + "` found for struct `" + rt + "`", fnode[3], fnode[4])
+    if m == nil:
+        for a in args:
+            ck_expr(a)
+        return "int"
+    if m[3] and fnode[1][0] == "var":
+        let e = ck_lookup(fnode[1][1])
+        if e != nil and not e[2]:
+            ck_err("E0596", "cannot call mutating method `" + fnode[2] + "` on `" + fnode[1][1] + "`, as it is not declared as mutable", fnode[3], fnode[4])
+    let want = len(m[1]) - 1
+    let n = len(args)
+    if n != want:
+        ck_err("E0061", "this function takes " + arg_word(want) + " but " + str(n) + " arguments were supplied", pos[0], pos[1])
+    let mut i = 0
+    while i < n:
+        let at = ck_expr(args[i])
+        if i < want:
+            let pt = m[1][i + 1]
+            if at == "list[_]":
+                let lit = args[i]
+                lit[len(lit) - 1] = pt
+            elif at != pt:
+                let apos = ck_node_pos(args[i])
+                ck_err("E0308", "mismatched types: expected `" + pt + "`, found `" + at + "`", apos[0], apos[1])
+        i = i + 1
+    if m[2] == "":
+        return "nil"
+    return m[2]
+
 def ck_call(node: list[str]) -> str:
     let fnode = node[1]
     let args = node[2]
     let pos = [node[3], node[4]]
+    if fnode[0] == "field":
+        return ck_method_call(node, fnode)
     if fnode[0] != "var":
         ck_err("E0618", "cannot call a non-function expression", pos[0], pos[1])
         for a in args:
