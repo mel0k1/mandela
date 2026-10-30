@@ -1,0 +1,15 @@
+let mut counter = 0
+let name = "mandela"
+
+def bump(by: int):
+    counter = counter + by
+
+def main():
+    print(name)
+    bump(3)
+    bump(4)
+    print(counter)
+    if counter > 5:
+        print("big")
+
+main()

@@ -1,0 +1,4 @@
+def main():
+    let d = {}
+    print(d)
+main()

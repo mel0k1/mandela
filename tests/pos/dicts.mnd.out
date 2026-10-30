@@ -1,0 +1,21 @@
+{"apples": 3, "bananas": 5}
+2
+3
+{"apples": 4, "bananas": 5, "cherries": 7}
+true
+false
+["apples", "bananas", "cherries"]
+[4, 5, 7]
+16
+apples
+bananas
+cherries
+two/three
+true
+false
+{2: "two", 3: "three"}
+{}
+0
+true
+false
+[2, 4]

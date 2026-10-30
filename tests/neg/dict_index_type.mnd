@@ -1,0 +1,4 @@
+def main():
+    let d: dict[int, int] = {1: 10}
+    print(d["x"])
+main()

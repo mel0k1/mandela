@@ -1,0 +1,36 @@
+def sum_values(d: dict[str, int]) -> int:
+    let mut total = 0
+    for v in d.values():
+        total = total + v
+    return total
+
+def main():
+    let mut stock: dict[str, int] = {"apples": 3, "bananas": 5}
+    print(stock)
+    print(len(stock))
+    print(stock["apples"])
+    stock["cherries"] = 7
+    stock["apples"] = stock["apples"] + 1
+    print(stock)
+    print(stock.has("bananas"))
+    print(stock.has("pears"))
+    print(stock.keys())
+    print(stock.values())
+    print(sum_values(stock))
+    for k in stock:
+        print(k)
+    let mut by_id: dict[int, str] = {1: "one", 2: "two"}
+    by_id[3] = "three"
+    print(by_id[2] + "/" + by_id[3])
+    print(by_id.remove(1))
+    print(by_id.remove(99))
+    print(by_id)
+    let empty: dict[str, int] = {}
+    print(empty)
+    print(len(empty))
+    print({"a": 1} == {"a": 1})
+    print({"a": 1} == {"a": 2})
+    let nested: dict[str, list[int]] = {"odd": [1, 3], "even": [2, 4]}
+    print(nested["even"])
+
+main()

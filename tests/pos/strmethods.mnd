@@ -1,0 +1,29 @@
+def shout(s: str) -> str:
+    return s.trim().upper()
+
+def main():
+    let s = "  Mandela Language  "
+    print(shout(s))
+    print(s.trim().lower())
+    print("a,b,,c".split(","))
+    print("one-two-three".split("-"))
+    print("hello world".contains("lo w"))
+    print("hello".contains("x"))
+    print("mandela".starts_with("man"))
+    print("mandela".ends_with("la"))
+    print("mandela".find("del"))
+    print("mandela".find("zzz"))
+    print("mandela".replace("a", "@"))
+    print("mandela".replace("an", "AN"))
+    print("abcdef".substr(2, 3))
+    print("abcdef".substr(4, 100))
+    print("ab".repeat(4))
+    print("ab".repeat(0))
+    print("".repeat(3))
+    print("x".chars())
+    print(len("hello"))
+    print("a" + "b".upper())
+    if "abc" < "abd":
+        print("sorted")
+
+main()

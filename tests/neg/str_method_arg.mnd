@@ -1,0 +1,3 @@
+def main():
+    print("abc".repeat("x"))
+main()
