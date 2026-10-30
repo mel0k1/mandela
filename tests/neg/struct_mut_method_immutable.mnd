@@ -1,0 +1,10 @@
+struct Counter:
+    count: int
+
+    def inc(mut self):
+        self.count = self.count + 1
+
+def main():
+    let c = Counter { count: 0 }
+    c.inc()
+    print(c.count)

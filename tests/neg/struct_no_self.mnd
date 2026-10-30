@@ -1,0 +1,10 @@
+struct Point:
+    x: int
+    y: int
+
+    def sum(p: Point) -> int:
+        return p.x + p.y
+
+def main():
+    let p = Point { x: 1, y: 2 }
+    print(p.sum())

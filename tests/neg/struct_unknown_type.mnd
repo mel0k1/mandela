@@ -1,0 +1,6 @@
+struct Point:
+    x: int
+
+def main():
+    let p: Nope = Point { x: 1 }
+    print(p.x)
