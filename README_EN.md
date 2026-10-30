@@ -11,8 +11,8 @@ The Mandela compiler is written in Mandela itself.
 English | [Русский](README.md)
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.4%20pointers%20%26%20arenas-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.5%20floating%20point-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-81%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -70,7 +70,8 @@ fib(1) = 1
 fib(10) = 55
 ```
 
-An ASCII mandelbrot fits in plain integers too — see [examples/mandel.mnd](examples/mandel.mnd).
+An ASCII mandelbrot fits in plain integers too — see [examples/mandel.mnd](examples/mandel.mnd),
+and a floating-point version lives in [examples/mandelbrot.mnd](examples/mandelbrot.mnd).
 
 ## Structs and methods
 
@@ -117,6 +118,30 @@ Dictionaries keep insertion order; keys are `str` or `int`. Dictionary methods:
 `keys`, `values`, `has`, `remove`. String methods: `upper`, `lower`, `trim`,
 `split`, `contains`, `starts_with`, `ends_with`, `replace`, `find`, `substr`,
 `repeat`, `chars`.
+
+## Floating point
+
+```mandela
+# examples/floats.mnd
+let radius = 2.5
+let pi = 3.14159
+print(pi * radius * radius)      # 19.6349375
+
+def hypot(a: f64, b: f64) -> f64:
+    return sqrt(a * a + b * b)
+
+print(hypot(3.0, 4.0))           # 5.0
+print(f64(7) / 2.0)              # 3.5 — explicit int → f64 conversion
+print(int(3.9))                  # 3   — truncation toward zero
+print(1.0 / 0.0)                 # inf — IEEE 754, no panic
+```
+
+The `f64` type is an IEEE 754 double. `int` and `f64` never mix implicitly
+(`x + n` is `error[E0369]`); conversions are explicit: `f64(x)` and `int(x)`.
+Division by zero does not panic: `1.0/0.0 = inf`, `0.0/0.0 = nan`. Output uses
+the shortest decimal string that round-trips: `2.0`, `0.1`,
+`0.30000000000000004`, `1e+16`. Math built-ins: `abs`, `sqrt`, `floor`,
+`ceil`, `round`, `pow`.
 
 ## Pointers and arenas
 
@@ -241,10 +266,13 @@ generates machine code on its own (see the roadmap).
 ./bin/mandela ast file.mnd              # AST dump as s-expressions (debug)
 ```
 
-## v0.4 features
+## v0.5 features
 
-- Static typing with inference: `let x = 5`, `list[int]`, `dict[str, int]`,
-  `ptr[int]`, `ptr[Node]`
+- Static typing with inference: `let x = 5`, `let x = 2.5`, `list[int]`,
+  `dict[str, int]`, `ptr[int]`, `ptr[Node]`
+- Floating point `f64` (IEEE 754): literals `2.5`, `1.5e-3`, panic-free
+  arithmetic (`inf`/`nan`), shortest round-trip printing, math built-ins
+  `abs sqrt floor ceil round pow`, explicit `f64()`/`int()` conversions
 - Immutability by default: `let` vs `let mut`, `mut self` for methods
 - 64-bit integers (truncating division, two's-complement wrap-around),
   strings, `bool`, `nil`, lists, insertion-ordered dictionaries
@@ -257,9 +285,9 @@ generates machine code on its own (see the roadmap).
 - `if/elif/else`, `while`, `for x in range(...)/list/string/dict`,
   `break`, `continue`
 - Functions with mandatory parameter annotations, recursion, function hoisting
-- Built-ins: `print len str int chr ord push pop split substr read_file
+- Built-ins: `print len str int f64 chr ord push pop split substr read_file
   write_file args fatal exit range alloc arena_new arena_alloc arena_free
-  ptr_len is_null`
+  ptr_len is_null abs sqrt floor ceil round pow`
 - Code generation: native binaries via the system toolchain, `--emit c|asm|bin`
 - Strict type checker with `E0xxx` diagnostics, unused-variable warnings
 
@@ -267,7 +295,6 @@ generates machine code on its own (see the roadmap).
 
 | Version | Plan |
 | --- | --- |
-| v0.5 | Floating point |
 | v0.6 | Direct machine-code backend (x86-64/ARM64) without an intermediate representation |
 | v0.7 | Modules instead of linear scripts, package manager |
 | v0.8 | Self-compilation: the Mandela compiler emits machine code for itself |
@@ -275,7 +302,7 @@ generates machine code on its own (see the roadmap).
 ## Development
 
 ```bash
-make test        # 70 tests: positive, negative, panic and native-build parity
+make test        # 81 tests: positive, negative, panic and native-build parity
 ```
 
 Every positive test runs twice: on the interpreter and compiled — the output
@@ -289,7 +316,7 @@ bin/mandela          CLI
 bootstrap/mandela.py bootstrap engine (interpreter)
 bootstrap/codegen.py code generation backend
 src/*.mnd            the compiler, written in Mandela
-spec/SPEC.md         language specification v0.4
+spec/SPEC.md         language specification v0.5
 examples/            example programs
 tests/               positive, negative, panic and native tests
 ```

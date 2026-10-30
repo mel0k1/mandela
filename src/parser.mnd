@@ -27,6 +27,8 @@ def p_desc(t: list[str]) -> str:
         return "identifier `" + t[1] + "`"
     if t[0] == "int":
         return "integer `" + str(t[1]) + "`"
+    if t[0] == "fnum":
+        return "floating-point `" + str(t[1]) + "`"
     if t[0] == "str":
         return "string literal"
     if t[0] == "nl":
@@ -370,6 +372,9 @@ def p_atom() -> list[str]:
     if t[0] == "int":
         p_next()
         return ["num", t[1], t[2], t[3]]
+    if t[0] == "fnum":
+        p_next()
+        return ["fnum", t[1], t[2], t[3]]
     if t[0] == "str":
         p_next()
         return ["str", t[1], t[2], t[3]]

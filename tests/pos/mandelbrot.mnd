@@ -1,0 +1,33 @@
+# ASCII Mandelbrot over f64: -2.1..0.9 x -1.2..1.2
+def mandel(cr: f64, ci: f64) -> int:
+    let mut zr = 0.0
+    let mut zi = 0.0
+    let mut i = 0
+    while i < 50 and zr * zr + zi * zi <= 4.0:
+        let t = zr * zr - zi * zi + cr
+        zi = 2.0 * zr * zi + ci
+        zr = t
+        i = i + 1
+    return i
+
+def shade(i: int) -> str:
+    if i >= 50:
+        return "#"
+    if i >= 20:
+        return "%"
+    if i >= 8:
+        return "+"
+    if i >= 3:
+        return "."
+    return " "
+
+def main():
+    for r in range(0, 24):
+        let row = -1.2 + f64(r) * 0.1
+        let mut line = ""
+        for c in range(0, 62):
+            let col = -2.1 + f64(c) * 0.05
+            line = line + shade(mandel(col, row))
+        print(line)
+
+main()

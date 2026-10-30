@@ -11,8 +11,8 @@
 [English](README_EN.md) | Русский
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.4%20pointers%20%26%20arenas-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.5%20floating%20point-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-81%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -70,7 +70,8 @@ fib(1) = 1
 fib(10) = 55
 ```
 
-Даже ASCII-мандельброт пишется на целых числах — [examples/mandel.mnd](examples/mandel.mnd).
+Даже ASCII-мандельброт пишется на целых числах — [examples/mandel.mnd](examples/mandel.mnd),
+а версия на числах с плавающей точкой — [examples/mandelbrot.mnd](examples/mandelbrot.mnd).
 
 ## Структуры и методы
 
@@ -117,6 +118,30 @@ print("mandela".replace("a", "4"))# m4ndel4
 `keys`, `values`, `has`, `remove`. Строковые методы: `upper`, `lower`, `trim`,
 `split`, `contains`, `starts_with`, `ends_with`, `replace`, `find`, `substr`,
 `repeat`, `chars`.
+
+## Числа с плавающей точкой
+
+```mandela
+# examples/floats.mnd
+let radius = 2.5
+let pi = 3.14159
+print(pi * radius * radius)      # 19.6349375
+
+def hypot(a: f64, b: f64) -> f64:
+    return sqrt(a * a + b * b)
+
+print(hypot(3.0, 4.0))           # 5.0
+print(f64(7) / 2.0)              # 3.5 — явная конверсия int → f64
+print(int(3.9))                  # 3   — усечение к нулю
+print(1.0 / 0.0)                 # inf — по IEEE 754, без паники
+```
+
+Тип `f64` — IEEE 754 double. `int` и `f64` не смешиваются неявно
+(`x + n` — `error[E0369]`), конверсии явные: `f64(x)` и `int(x)`. Деление на
+ноль не паникует: `1.0/0.0 = inf`, `0.0/0.0 = nan`. Вывод — кратчайшее
+десятичное представление с обратным преобразованием: `2.0`, `0.1`,
+`0.30000000000000004`, `1e+16`. Математика: `abs`, `sqrt`, `floor`, `ceil`,
+`round`, `pow`.
 
 ## Указатели и арены
 
@@ -241,10 +266,13 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 ./bin/mandela ast file.mnd              # дамп AST в s-выражениях (отладка)
 ```
 
-## Возможности v0.4
+## Возможности v0.5
 
-- Статическая типизация с выводом типов: `let x = 5`, `list[int]`,
-  `dict[str, int]`, `ptr[int]`, `ptr[Node]`
+- Статическая типизация с выводом типов: `let x = 5`, `let x = 2.5`,
+  `list[int]`, `dict[str, int]`, `ptr[int]`, `ptr[Node]`
+- Числа с плавающей точкой `f64` (IEEE 754): литералы `2.5`, `1.5e-3`,
+  арифметика без паник (`inf`/`nan`), кратчайший round-trip вывод,
+  математика `abs sqrt floor ceil round pow`, явные конверсии `f64()`/`int()`
 - Неизменяемость по умолчанию: `let` против `let mut`, `mut self` для методов
 - Целые 64-битные числа (усечённое деление, переполнение по модулю 2^64),
   строки, `bool`, `nil`, списки, словари с сохранением порядка вставки
@@ -257,9 +285,9 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 - `if/elif/else`, `while`, `for x in range(...)/список/строка/словарь`,
   `break`, `continue`
 - Функции с обязательными аннотациями параметров, рекурсия, хоистинг функций
-- Встроенные: `print len str int chr ord push pop split substr read_file
+- Встроенные: `print len str int f64 chr ord push pop split substr read_file
   write_file args fatal exit range alloc arena_new arena_alloc arena_free
-  ptr_len is_null`
+  ptr_len is_null abs sqrt floor ceil round pow`
 - Кодогенерация: нативные бинари через системный тулчейн, `--emit c|asm|bin`
 - Строгий тайп-чекер с диагностиками `E0xxx`, предупреждения о неиспользуемых
   переменных
@@ -268,7 +296,6 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 
 | Версия | Что планируется |
 | --- | --- |
-| v0.5 | Числа с плавающей точкой |
 | v0.6 | Прямой бэкенд в машинный код (x86-64/ARM64) без промежуточного представления |
 | v0.7 | Модули вместо линейных скриптов, менеджер пакетов |
 | v0.8 | Самосборка: компилятор Mandela генерирует машинный код для самого себя |
@@ -276,7 +303,7 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 ## Разработка
 
 ```bash
-make test        # 70 тестов: позитивные, негативные, паники и паритет нативной сборки
+make test        # 81 тест: позитивные, негативные, паники и паритет нативной сборки
 ```
 
 Каждый позитивный тест прогоняется дважды: интерпретатором и в скомпилированном
@@ -291,7 +318,7 @@ bin/mandela          CLI
 bootstrap/mandela.py бутстрап-движок (интерпретатор)
 bootstrap/codegen.py бэкенд кодогенерации
 src/*.mnd            компилятор, написанный на Mandela
-spec/SPEC.md         спецификация языка v0.4
+spec/SPEC.md         спецификация языка v0.5
 examples/            примеры программ
 tests/               тесты (позитивные, негативные, паники, нативные)
 ```

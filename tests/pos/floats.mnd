@@ -1,0 +1,98 @@
+# literals and arithmetic
+let a = 2.5
+let b = 0.5
+print(a + b)
+print(a - b)
+print(a * b)
+print(a / b)
+print(7.5 % 2.0)
+print(-a)
+print(1.0 / 3.0)
+print(0.1 + 0.2)
+print(2.0e2)
+print(1.5e-2)
+print(2.5e-7)
+
+# inf and nan: float division never panics
+print(1.0 / 0.0)
+print(-1.0 / 0.0)
+print(0.0 / 0.0)
+
+# comparisons
+print(1.5 < 2.5)
+print(2.5 <= 2.5)
+print(3.5 > 4.0)
+print(2.0 == 2.0)
+print(2.0 != 2.0)
+print(0.0 == -0.0)
+
+# conversions
+let x = 3
+print(f64(x))
+print(f64("2.5"))
+print(int(2.9))
+print(int(-2.9))
+print(str(2.5))
+print("v=" + str(1.5))
+
+# math built-ins
+print(abs(-3.5))
+print(abs(-3))
+print(sqrt(2.0))
+print(sqrt(4.0))
+print(sqrt(-1.0))
+print(floor(2.7))
+print(floor(-2.1))
+print(ceil(2.1))
+print(round(2.5))
+print(round(-2.5))
+print(round(2.4))
+print(pow(2.0, 10.0))
+print(pow(2.0, 0.5))
+print(pow(-2.0, 3.0))
+
+# lists, dicts, structs
+let nums: list[f64] = [1.5, 2.0, 2.5]
+print(nums)
+print(nums[1])
+let mut total = 0.0
+for v in nums:
+    total = total + v
+print(total)
+
+let scores: dict[str, f64] = {"pi": 3.14}
+scores["e"] = 2.72
+print(scores)
+
+struct Vec:
+    x: f64
+    y: f64
+
+    def dot(self, o: Vec) -> f64:
+        return self.x * o.x + self.y * o.y
+
+let v1 = Vec { x: 1.5, y: 2.0 }
+let v2 = Vec { x: 2.0, y: 0.5 }
+print(v1.dot(v2))
+print(v1)
+
+# functions and loops
+def avg(xs: list[f64]) -> f64:
+    let mut s = 0.0
+    for v in xs:
+        s = s + v
+    return s / f64(len(xs))
+
+print(avg([1.0, 2.0, 3.5]))
+
+let mut w = 1.0
+while w < 2.0:
+    w = w * 1.5
+print(w)
+
+# shortest round-trip formatting
+print(1.0e15)
+print(1.0e16)
+print(5.0e-324)
+print(1.7976931348623157e308)
+print(123456789.123456789)

@@ -11,8 +11,9 @@ let mut c_ret = ""
 let mut c_retc = 0
 
 def ck_builtins() -> list[str]:
-    return ["print", "len", "str", "int", "chr", "ord", "push", "pop", "split",
-            "substr", "read_file", "write_file", "args", "fatal", "exit"]
+    return ["print", "len", "str", "int", "f64", "chr", "ord", "push", "pop",
+            "split", "substr", "read_file", "write_file", "args", "fatal", "exit",
+            "abs", "sqrt", "floor", "ceil", "round", "pow"]
 
 def ck_is_builtin(name: str) -> bool:
     for b in ck_builtins():
@@ -56,7 +57,7 @@ def ck_err(code: str, msg: str, line: int, col: int):
     push(c_errs, fmt_error("error", code, msg, line, col))
 
 def ck_valid_type(t: str) -> bool:
-    if t == "int" or t == "str" or t == "bool" or t == "nil" or t == "Arena":
+    if t == "int" or t == "f64" or t == "str" or t == "bool" or t == "nil" or t == "Arena":
         return true
     if ck_find_struct(t) != nil:
         return true
@@ -462,6 +463,8 @@ def ck_expr(node: list[str]) -> str:
     let mut t = "nil"
     if tag == "num":
         t = "int"
+    elif tag == "fnum":
+        t = "f64"
     elif tag == "str":
         t = "str"
     elif tag == "bool":
@@ -524,9 +527,9 @@ def ck_expr(node: list[str]) -> str:
     elif tag == "un":
         let et = ck_expr(node[2])
         if node[1] == "-":
-            if et != "int":
+            if et != "int" and et != "f64":
                 ck_err("E0369", "cannot apply unary operator `-` to type `" + et + "`", node[3], node[4])
-            t = "int"
+            t = et
         else:
             if et != "bool":
                 ck_err("E0308", "mismatched types: expected `bool`, found `" + et + "`", node[3], node[4])
@@ -584,13 +587,15 @@ def ck_bin(node: list[str]) -> str:
             ck_err("E0308", "mismatched types: cannot compare `" + lt + "` with `" + rt + "`", node[4], node[5])
         return "bool"
     if op == "<" or op == "<=" or op == ">" or op == ">=":
-        if (lt == "int" and rt == "int") or (lt == "str" and rt == "str"):
+        if (lt == "int" and rt == "int") or (lt == "f64" and rt == "f64") or (lt == "str" and rt == "str"):
             return "bool"
         ck_err("E0369", "cannot compare `" + lt + "` with `" + rt + "`", node[4], node[5])
         return "bool"
     if op == "+":
         if lt == "int" and rt == "int":
             return "int"
+        if lt == "f64" and rt == "f64":
+            return "f64"
         if lt == "str" and rt == "str":
             return "str"
         if ck_is_ptr(lt) and rt == "int":
@@ -600,6 +605,8 @@ def ck_bin(node: list[str]) -> str:
     if op == "-" or op == "*" or op == "/" or op == "%":
         if lt == "int" and rt == "int":
             return "int"
+        if lt == "f64" and rt == "f64":
+            return "f64"
     ck_err("E0369", "cannot apply operator `" + op + "` to types `" + lt + "` and `" + rt + "`", node[4], node[5])
     return "int"
 
@@ -793,9 +800,30 @@ def ck_call(node: list[str]) -> str:
     if name == "int":
         ck_arity(1, n, pos)
         let t = ck_expr(args[0])
-        if t != "str" and t != "int":
-            ck_err("E0308", "expected `str` or `int`, found `" + t + "`", pos[0], pos[1])
+        if t != "str" and t != "int" and t != "f64":
+            ck_err("E0308", "expected `str`, `int` or `f64`, found `" + t + "`", pos[0], pos[1])
         return "int"
+    if name == "f64":
+        ck_arity(1, n, pos)
+        let t = ck_expr(args[0])
+        if t != "str" and t != "int" and t != "f64":
+            ck_err("E0308", "expected `str`, `int` or `f64`, found `" + t + "`", pos[0], pos[1])
+        return "f64"
+    if name == "abs":
+        ck_arity(1, n, pos)
+        let t = ck_expr(args[0])
+        if t != "int" and t != "f64":
+            ck_err("E0308", "expected `int` or `f64`, found `" + t + "`", pos[0], pos[1])
+        return t
+    if name == "sqrt" or name == "floor" or name == "ceil" or name == "round":
+        ck_arity(1, n, pos)
+        ck_typed_arg(args[0], "f64")
+        return "f64"
+    if name == "pow":
+        ck_arity(2, n, pos)
+        ck_typed_arg(args[0], "f64")
+        ck_typed_arg(args[1], "f64")
+        return "f64"
     if name == "chr":
         ck_arity(1, n, pos)
         let t = ck_expr(args[0])

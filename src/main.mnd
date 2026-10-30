@@ -76,6 +76,8 @@ def dbg_sexpr(n: list[str]) -> str:
         return dbg_sexpr(n[1])
     if tag == "num":
         return str(n[1])
+    if tag == "fnum":
+        return str(n[1])
     if tag == "str":
         return "\"" + n[1] + "\""
     if tag == "bool":

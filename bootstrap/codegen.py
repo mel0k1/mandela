@@ -10,6 +10,7 @@ tables, methods become plain functions dispatched by name at runtime.
 Evaluation order and panic messages mirror the bootstrap interpreter exactly.
 """
 
+import math
 import os
 import shutil
 import subprocess
@@ -36,12 +37,13 @@ def c_str(s):
     return '"%s"' % "".join(out), len(raw)
 
 
-RUNTIME_C = r'''/* ---- Mandela runtime (v0.3) ---------------------------------- */
+RUNTIME_C = r'''/* ---- Mandela runtime (v0.5) ---------------------------------- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <ctype.h>
+#include <math.h>
 
 typedef struct MndStr MndStr;
 typedef struct MndList MndList;
@@ -52,12 +54,13 @@ typedef struct MndValue MndValue;
 typedef struct MndArena MndArena;
 typedef struct MndPtr MndPtr;
 
-typedef enum { MND_NIL = 0, MND_INT, MND_BOOL, MND_STR, MND_LIST, MND_STRUCT, MND_DICT, MND_PTR, MND_ARENA } MndTag;
+typedef enum { MND_NIL = 0, MND_INT, MND_FLOAT, MND_BOOL, MND_STR, MND_LIST, MND_STRUCT, MND_DICT, MND_PTR, MND_ARENA } MndTag;
 
 struct MndValue {
     MndTag tag;
     union {
         int64_t i;
+        double f;
         int b;
         MndStr *s;
         MndList *l;
@@ -127,6 +130,7 @@ static const char *mnd_type_name(MndValue v) {
     case MND_NIL: return "nil";
     case MND_BOOL: return "bool";
     case MND_INT: return "int";
+    case MND_FLOAT: return "f64";
     case MND_STR: return "str";
     case MND_LIST: return "list";
     case MND_DICT: return "dict";
@@ -139,6 +143,7 @@ static const char *mnd_type_name(MndValue v) {
 
 static MndValue mnd_nil_v(void) { MndValue v; v.tag = MND_NIL; v.u.i = 0; return v; }
 static MndValue mnd_int_v(int64_t i) { MndValue v; v.tag = MND_INT; v.u.i = i; return v; }
+static MndValue mnd_f64_v(double d) { MndValue v; v.tag = MND_FLOAT; v.u.f = d; return v; }
 static MndValue mnd_bool_v(int b) { MndValue v; v.tag = MND_BOOL; v.u.b = b ? 1 : 0; return v; }
 static MndValue mnd_ptr_v(int tag, void *p) { MndValue v; v.tag = (MndTag)tag; v.u.s = p; return v; }
 static MndValue mnd_ptr_val(MndPtr *p) { MndValue v; v.tag = MND_PTR; v.u.pt = p; return v; }
@@ -188,6 +193,72 @@ static void mnd_buf_i64(MndBuf *b, int64_t x) {
     mnd_buf_put(b, tmp, n);
 }
 
+/* Formats a double exactly like Python's repr(): the shortest decimal string
+ * that round-trips, fixed notation for |x| in [1e-4, 1e16), scientific
+ * otherwise, always with a fraction or exponent so the value reads as a
+ * float. The bootstrap interpreter prints str(float), so the two backends
+ * stay byte-identical. */
+static void mnd_buf_f64(MndBuf *b, double v) {
+    if (v != v) { mnd_buf_cstr(b, "nan"); return; }
+    if (isinf(v)) { mnd_buf_cstr(b, v < 0 ? "-inf" : "inf"); return; }
+    char tmp[64];
+    int neg = signbit(v) != 0;
+    double a = neg ? -v : v;
+    int prec;
+    for (prec = 1; prec < 17; prec++) {
+        snprintf(tmp, sizeof(tmp), "%.*e", prec - 1, a);
+        if (strtod(tmp, NULL) == a) break;
+    }
+    if (prec >= 17) snprintf(tmp, sizeof(tmp), "%.16e", a);
+    char digits[40];
+    int nd = 0;
+    int decpt = 0;
+    const char *p;
+    for (p = tmp; *p; p++) {
+        if (*p == 'e') { decpt = atoi(p + 1) + 1; break; }
+        if (*p >= '0' && *p <= '9') digits[nd++] = *p;
+    }
+    digits[nd] = 0;
+    while (nd > 1 && digits[nd - 1] == '0') digits[--nd] = 0;
+    char out[80];
+    int k = 0;
+    if (neg) out[k++] = '-';
+    if (decpt <= -4 || decpt > 16) {
+        int e = decpt - 1;
+        out[k++] = digits[0];
+        if (nd > 1) {
+            out[k++] = '.';
+            memcpy(out + k, digits + 1, (size_t)(nd - 1));
+            k += nd - 1;
+        }
+        out[k++] = 'e';
+        if (e < 0) { out[k++] = '-'; e = -e; }
+        else out[k++] = '+';
+        if (e >= 100) out[k++] = (char)('0' + e / 100);
+        out[k++] = (char)('0' + (e / 10) % 10);
+        out[k++] = (char)('0' + e % 10);
+    } else if (decpt <= 0) {
+        out[k++] = '0';
+        out[k++] = '.';
+        for (int i = 0; i < -decpt; i++) out[k++] = '0';
+        memcpy(out + k, digits, (size_t)nd);
+        k += nd;
+    } else if (decpt >= nd) {
+        memcpy(out + k, digits, (size_t)nd);
+        k += nd;
+        for (int i = 0; i < decpt - nd; i++) out[k++] = '0';
+        out[k++] = '.';
+        out[k++] = '0';
+    } else {
+        memcpy(out + k, digits, (size_t)decpt);
+        k += decpt;
+        out[k++] = '.';
+        memcpy(out + k, digits + decpt, (size_t)(nd - decpt));
+        k += nd - decpt;
+    }
+    mnd_buf_put(b, out, k);
+}
+
 static char *mnd_buf_z(MndBuf *b) {
     mnd_buf_need(b, 0);
     b->data[b->len] = 0;
@@ -217,6 +288,9 @@ static void mnd_format_into(MndBuf *b, MndValue v, int nested) {
         break;
     case MND_INT:
         mnd_buf_i64(b, v.u.i);
+        break;
+    case MND_FLOAT:
+        mnd_buf_f64(b, v.u.f);
         break;
     case MND_STR:
         if (nested) {
@@ -292,6 +366,7 @@ static uint64_t mnd_hash(MndValue v) {
     case MND_NIL: return 0;
     case MND_BOOL: return mnd_hash_mix((uint64_t)v.u.b);
     case MND_INT: return mnd_hash_mix((uint64_t)v.u.i);
+    case MND_FLOAT: return 0;   /* float keys are rejected before hashing */
     case MND_STR: {
         uint64_t h = 1469598103934665603ULL;
         for (int64_t i = 0; i < v.u.s->len; i++) {
@@ -449,11 +524,14 @@ static MndValue mnd_dict_values(MndDict *d) {
 /* ---- equality --------------------------------------------------- */
 
 static int mnd_eq(MndValue a, MndValue b) {
+    if (a.tag == MND_FLOAT && b.tag == MND_INT) return a.u.f == (double)b.u.i;
+    if (a.tag == MND_INT && b.tag == MND_FLOAT) return (double)a.u.i == b.u.f;
     if (a.tag != b.tag) return 0;
     switch (a.tag) {
     case MND_NIL: return 1;
     case MND_BOOL: return a.u.b == b.u.b;
     case MND_INT: return a.u.i == b.u.i;
+    case MND_FLOAT: return a.u.f == b.u.f;
     case MND_STR:
         return a.u.s->len == b.u.s->len &&
                memcmp(a.u.s->data, b.u.s->data, (size_t)a.u.s->len) == 0;
@@ -513,22 +591,26 @@ static MndValue mnd_add(MndValue l, MndValue r) {
         return mnd_ptr_v(MND_STR, s);
     }
     if (l.tag == MND_PTR && r.tag == MND_INT) return mnd_ptr_off(l.u.pt, r.u.i);
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_f64_v(l.u.f + r.u.f);
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("+", l, r);
     return mnd_int_v((int64_t)((uint64_t)l.u.i + (uint64_t)r.u.i));
 }
 
 static MndValue mnd_sub(MndValue l, MndValue r) {
     if (l.tag == MND_PTR && r.tag == MND_INT) return mnd_ptr_off(l.u.pt, (int64_t)(0 - (uint64_t)r.u.i));
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_f64_v(l.u.f - r.u.f);
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("-", l, r);
     return mnd_int_v((int64_t)((uint64_t)l.u.i - (uint64_t)r.u.i));
 }
 
 static MndValue mnd_mul(MndValue l, MndValue r) {
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_f64_v(l.u.f * r.u.f);
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("*", l, r);
     return mnd_int_v((int64_t)((uint64_t)l.u.i * (uint64_t)r.u.i));
 }
 
 static MndValue mnd_div(MndValue l, MndValue r) {
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_f64_v(l.u.f / r.u.f);
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("/", l, r);
     if (r.u.i == 0) mnd_panic("attempt to divide by zero");
     if (r.u.i == -1) return mnd_int_v((int64_t)(0 - (uint64_t)l.u.i));
@@ -536,6 +618,7 @@ static MndValue mnd_div(MndValue l, MndValue r) {
 }
 
 static MndValue mnd_rem(MndValue l, MndValue r) {
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_f64_v(fmod(l.u.f, r.u.f));
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("%", l, r);
     if (r.u.i == 0) mnd_panic("attempt to calculate the remainder with a divisor of zero");
     if (r.u.i == -1) return mnd_int_v(0);
@@ -543,6 +626,7 @@ static MndValue mnd_rem(MndValue l, MndValue r) {
 }
 
 static MndValue mnd_neg(MndValue v) {
+    if (v.tag == MND_FLOAT) return mnd_f64_v(-v.u.f);
     if (v.tag != MND_INT) {
         char msg[192];
         snprintf(msg, sizeof(msg), "cannot apply unary `-` to type `%s`", mnd_type_name(v));
@@ -570,12 +654,14 @@ static int mnd_str_cmp(MndStr *a, MndStr *b) {
 
 static MndValue mnd_lt(MndValue l, MndValue r) {
     if (l.tag == MND_INT && r.tag == MND_INT) return mnd_bool_v(l.u.i < r.u.i);
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_bool_v(l.u.f < r.u.f);
     if (l.tag == MND_STR && r.tag == MND_STR) return mnd_bool_v(mnd_str_cmp(l.u.s, r.u.s));
     return mnd_cmp_fail(l, r);
 }
 
 static MndValue mnd_le(MndValue l, MndValue r) {
     if (l.tag == MND_INT && r.tag == MND_INT) return mnd_bool_v(l.u.i <= r.u.i);
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_bool_v(l.u.f <= r.u.f);
     if (l.tag == MND_STR && r.tag == MND_STR)
         return mnd_bool_v(!mnd_str_cmp(r.u.s, l.u.s));
     return mnd_cmp_fail(l, r);
@@ -583,12 +669,14 @@ static MndValue mnd_le(MndValue l, MndValue r) {
 
 static MndValue mnd_gt(MndValue l, MndValue r) {
     if (l.tag == MND_INT && r.tag == MND_INT) return mnd_bool_v(l.u.i > r.u.i);
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_bool_v(l.u.f > r.u.f);
     if (l.tag == MND_STR && r.tag == MND_STR) return mnd_bool_v(mnd_str_cmp(r.u.s, l.u.s));
     return mnd_cmp_fail(l, r);
 }
 
 static MndValue mnd_ge(MndValue l, MndValue r) {
     if (l.tag == MND_INT && r.tag == MND_INT) return mnd_bool_v(l.u.i >= r.u.i);
+    if (l.tag == MND_FLOAT && r.tag == MND_FLOAT) return mnd_bool_v(l.u.f >= r.u.f);
     if (l.tag == MND_STR && r.tag == MND_STR)
         return mnd_bool_v(!mnd_str_cmp(l.u.s, r.u.s));
     return mnd_cmp_fail(l, r);
@@ -1215,9 +1303,16 @@ static MndValue mnd_bi_str(MndValue v) {
 
 static MndValue mnd_bi_int(MndValue v) {
     if (v.tag == MND_INT) return v;
+    if (v.tag == MND_FLOAT) {
+        double d = v.u.f;
+        if (d != d) mnd_panic("cannot convert `nan` to `int`");
+        if (d >= 9223372036854775808.0 || d < -9223372036854775808.0)
+            mnd_panic("number too large to fit in target type");
+        return mnd_int_v((int64_t)d);
+    }
     if (v.tag != MND_STR) {
         char msg[192];
-        snprintf(msg, sizeof(msg), "expected `str` or `int` in int(), found `%s`",
+        snprintf(msg, sizeof(msg), "expected `str`, `int` or `f64` in int(), found `%s`",
                  mnd_type_name(v));
         mnd_panic(msg);
     }
@@ -1298,6 +1393,93 @@ static MndValue mnd_bi_ord(MndValue v) {
              (((unsigned char)s->data[2] & 0x3F) << 6) | ((unsigned char)s->data[3] & 0x3F);
     if (cp < 0) mnd_panic("expected a single-character string in ord()");
     return mnd_int_v(cp);
+}
+
+static double mnd_f64_arg(MndValue v, const char *fn) {
+    if (v.tag == MND_FLOAT) return v.u.f;
+    char msg[192];
+    snprintf(msg, sizeof(msg), "expected `f64` in %s, found `%s`", fn,
+             mnd_type_name(v));
+    mnd_panic(msg);
+    return 0.0;
+}
+
+static MndValue mnd_bi_f64(MndValue v) {
+    if (v.tag == MND_FLOAT) return v;
+    if (v.tag == MND_INT) return mnd_f64_v((double)v.u.i);
+    if (v.tag == MND_STR) {
+        MndStr *s = v.u.s;
+        int64_t i = 0;
+        int dig = 0;
+        if (i < s->len && (s->data[i] == '+' || s->data[i] == '-')) i++;
+        while (i < s->len && s->data[i] >= '0' && s->data[i] <= '9') { i++; dig++; }
+        if (i < s->len && s->data[i] == '.') {
+            i++;
+            while (i < s->len && s->data[i] >= '0' && s->data[i] <= '9') { i++; dig++; }
+        }
+        if (dig == 0) {
+            if (s->len == 0) mnd_panic("cannot parse float from empty string");
+            mnd_panic("invalid float literal");
+        }
+        if (i < s->len && (s->data[i] == 'e' || s->data[i] == 'E')) {
+            int edig = 0;
+            i++;
+            if (i < s->len && (s->data[i] == '+' || s->data[i] == '-')) i++;
+            while (i < s->len && s->data[i] >= '0' && s->data[i] <= '9') { i++; edig++; }
+            if (edig == 0) mnd_panic("invalid float literal");
+        }
+        if (i != s->len) mnd_panic("invalid float literal");
+        char *z = mnd_alloc((size_t)s->len + 1);
+        memcpy(z, s->data, (size_t)s->len);
+        z[s->len] = 0;
+        return mnd_f64_v(strtod(z, NULL));
+    }
+    char msg[192];
+    snprintf(msg, sizeof(msg), "expected `str`, `int` or `f64` in f64(), found `%s`",
+             mnd_type_name(v));
+    mnd_panic(msg);
+    return mnd_nil_v();
+}
+
+static MndValue mnd_bi_abs(MndValue v) {
+    if (v.tag == MND_INT)
+        return v.u.i == INT64_MIN ? v : mnd_int_v(v.u.i < 0 ? -v.u.i : v.u.i);
+    if (v.tag == MND_FLOAT) return mnd_f64_v(fabs(v.u.f));
+    char msg[192];
+    snprintf(msg, sizeof(msg), "expected `int` or `f64` in abs(), found `%s`",
+             mnd_type_name(v));
+    mnd_panic(msg);
+    return mnd_nil_v();
+}
+
+static MndValue mnd_bi_sqrt(MndValue v) {
+    double d = mnd_f64_arg(v, "sqrt()");
+    return mnd_f64_v(d < 0.0 ? (double)NAN : sqrt(d));
+}
+
+static MndValue mnd_bi_floor(MndValue v) {
+    double d = mnd_f64_arg(v, "floor()");
+    return mnd_f64_v(floor(d));
+}
+
+static MndValue mnd_bi_ceil(MndValue v) {
+    double d = mnd_f64_arg(v, "ceil()");
+    return mnd_f64_v(ceil(d));
+}
+
+static MndValue mnd_bi_round(MndValue v) {
+    double d = mnd_f64_arg(v, "round()");
+    return mnd_f64_v(round(d));
+}
+
+static MndValue mnd_bi_pow(MndValue a, MndValue b) {
+    if (a.tag != MND_FLOAT || b.tag != MND_FLOAT) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "pow() expects two `f64` arguments, found `%s` and `%s`",
+                 mnd_type_name(a), mnd_type_name(b));
+        mnd_panic(msg);
+    }
+    return mnd_f64_v(pow(a.u.f, b.u.f));
 }
 
 static void mnd_list_push(MndList *l, MndValue v) {
@@ -1653,6 +1835,11 @@ class CodeGen:
             if n == -(1 << 63):
                 return "mnd_int_v((-9223372036854775807LL) - 1)"
             return "mnd_int_v(%dLL)" % n
+        if tag == "fnum":
+            v = node[1]
+            if math.isinf(v):
+                return "mnd_f64_v(-(double)INFINITY)" if v < 0 else "mnd_f64_v((double)INFINITY)"
+            return "mnd_f64_v(%s)" % repr(v)
         if tag == "str":
             lit, n = c_str(node[1])
             return "mnd_str_lit(%s, %d)" % (lit, n)
@@ -1749,8 +1936,9 @@ class CodeGen:
         es = [self.expr(a) for a in node[2]]
         builtins = {
             "print": "mnd_bi_print", "eprint": "mnd_bi_eprint", "len": "mnd_bi_len",
-            "str": "mnd_bi_str", "int": "mnd_bi_int", "chr": "mnd_bi_chr",
-            "ord": "mnd_bi_ord", "push": "mnd_bi_push", "pop": "mnd_bi_pop",
+            "str": "mnd_bi_str", "int": "mnd_bi_int", "f64": "mnd_bi_f64",
+            "chr": "mnd_bi_chr", "ord": "mnd_bi_ord", "push": "mnd_bi_push",
+            "pop": "mnd_bi_pop",
             "split": "mnd_bi_split", "substr": "mnd_bi_substr",
             "read_file": "mnd_bi_read_file", "write_file": "mnd_bi_write_file",
             "args": "mnd_bi_args", "fatal": "mnd_bi_fatal", "exit": "mnd_bi_exit",
@@ -1758,6 +1946,8 @@ class CodeGen:
             "alloc": "mnd_bi_alloc", "arena_new": "mnd_bi_arena_new",
             "arena_alloc": "mnd_bi_arena_alloc", "arena_free": "mnd_bi_arena_free",
             "ptr_len": "mnd_bi_ptr_len", "is_null": "mnd_bi_is_null",
+            "abs": "mnd_bi_abs", "sqrt": "mnd_bi_sqrt", "floor": "mnd_bi_floor",
+            "ceil": "mnd_bi_ceil", "round": "mnd_bi_round", "pow": "mnd_bi_pow",
         }
         if name in builtins:
             return self.calln(builtins[name], es)
@@ -1931,10 +2121,10 @@ def main():
     try:
         if emit == "asm":
             path = base if base.endswith(".s") else base + ".s"
-            cmd = [cc, "-O2", "-S", "-o", path, tmppath]
+            cmd = [cc, "-O2", "-S", "-o", path, tmppath, "-lm"]
         else:
             path = base
-            cmd = [cc, "-O2", "-o", path, tmppath]
+            cmd = [cc, "-O2", "-o", path, tmppath, "-lm"]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if proc.returncode != 0:
             sys.stderr.write(proc.stderr.decode("utf-8", "replace"))

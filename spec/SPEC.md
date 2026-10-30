@@ -1,4 +1,4 @@
-# The Mandela Language Specification — v0.4.0
+# The Mandela Language Specification — v0.5.0
 
 Status: draft, implemented by the self-hosted compiler in `src/` and the code
 generator in `bootstrap/codegen.py`.
@@ -19,7 +19,7 @@ Blank lines and comment-only lines carry no indentation significance.
 ### 1.2 Comments
 
 A comment starts with `#` and extends to the end of the line. There are no
-block comments and no docstrings in v0.3.
+block comments and no docstrings in v0.5.
 
 ### 1.3 Identifiers and keywords
 
@@ -39,6 +39,10 @@ true  false  nil  and  or  not  break  continue  unsafe
 ### 1.5 Literals
 
 - Integer: `[0-9]+`, signed 64-bit.
+- Floating point: `[0-9]+.[0-9]+` with an optional exponent
+  `([eE][+-]?[0-9]+)?`, IEEE 754 binary64. `2.` and `.5` are not floats —
+  the dot requires digits on both sides. There are no suffixes and no
+  hexadecimal or underscore forms.
 - String: `"..."` with escapes `\n \t \r \0 \" \\`. Strings do not span lines.
 - Booleans: `true`, `false`. Unit: `nil`.
 
@@ -47,7 +51,8 @@ true  false  nil  and  or  not  break  continue  unsafe
 | Type | Description |
 | --- | --- |
 | `int` | Signed 64-bit integer. Division `/` and remainder `%` truncate toward zero. Overflow wraps in two's complement. |
-| `str` | Immutable string. Indexing yields a one-character string. In native builds strings are byte sequences, so string offsets and lengths are reliable for ASCII input in v0.3. |
+| `f64` | IEEE 754 double-precision float; see §11. |
+| `str` | Immutable string. Indexing yields a one-character string. In native builds strings are byte sequences, so string offsets and lengths are reliable for ASCII input in v0.5. |
 | `bool` | `true` or `false`. Conditions must be `bool`; there is no truthiness coercion. |
 | `nil` | The unit-ish value `nil`, returned by functions without `->`. |
 | `list[T]` | Growable array of `T`. Empty literals require an annotation: `let a: list[int] = []`. |
@@ -56,7 +61,9 @@ true  false  nil  and  or  not  break  continue  unsafe
 | `Arena` | A memory region; pointers are allocated from it and released together; see §8. |
 | `struct` | Nominal record type defined in source; see §5. |
 
-There is no implicit conversion between any two types.
+There is no implicit conversion between any two types. In particular an
+integer never becomes a float on its own: `let x: f64 = 2` is `E0308` — write
+`2.0`, or convert explicitly with `f64(2)`.
 
 ## 3. Declarations
 
@@ -190,7 +197,7 @@ identically.
 Mandela has no garbage collector. Bulk memory is managed explicitly with
 region-based allocation: pointers are carved out of arenas and released
 together with the arena they came from. All pointer operations are checked at
-runtime — there is no undefined behaviour in v0.4.
+runtime — there is no undefined behaviour in v0.5.
 
 ### 8.1 Allocation
 
@@ -302,13 +309,14 @@ Precedence, from lowest to highest:
 
 Semantics:
 
-- `+` adds integers or concatenates strings; mixing is `E0369`.
+- `+` adds integers or floats, or concatenates strings; mixing is `E0369`.
 - `ptr[T] + int` and `ptr[T] - int` shift the view by that many slots (§8);
   any other pointer arithmetic combination is `E0369`.
-- `/` and `%` truncate toward zero and panic on a zero divisor.
+- On floats `/` and `%` never panic: see §11. On integers they truncate
+  toward zero and panic on a zero divisor.
 - `==`/`!=` require the same type on both sides (`E0308`); lists, dicts and
   structs are compared by contents.
-- Ordering comparisons require two ints or two strings (`E0369`).
+- Ordering comparisons require two ints, two floats or two strings (`E0369`).
 - Indexing out of bounds panics at runtime:
   `panic: index out of bounds: the len is 3 but the index is 5`.
 - Strings are immutable: `s[0] = "x"` is `E0594`.
@@ -316,14 +324,69 @@ Semantics:
 - Trailing commas are allowed in call arguments, list literals, dict literals
   and struct literals.
 
-## 11. Built-ins
+## 11. Floating point
+
+`f64` is an IEEE 754 binary64 double. Literals always contain a fractional
+part (`2.0`, `0.5`) and may carry an exponent (`1.5e-3`, `6.02e23`); unary
+`-` applies to floats as to integers.
+
+### 11.1 Arithmetic
+
+`+ - * / %` take two `f64` and return `f64`. Floating arithmetic follows IEEE
+754 and never panics:
+
+```text
+1.0 / 0.0      # inf
+-1.0 / 0.0     # -inf
+0.0 / 0.0      # nan
+1.0 % 0.0      # nan; otherwise % is C fmod: 7.5 % 2.0 == 1.5
+```
+
+`nan` compares false with everything, including itself. Overflow produces
+`±inf` instead of an error.
+
+### 11.2 Mixing with int
+
+`int` and `f64` are distinct types; every combination must be explicit:
+
+```text
+let x = 2.5
+let n = 4
+print(x + n)     # error[E0369]: cannot apply operator `+` to types `f64` and `int`
+print(x + f64(n))# ok: 6.5
+print(x * 2.0)   # ok: 5.0
+```
+
+- `f64(x)` converts `int` or `str` to `f64`. The string form accepts
+  `[+-]?digits[.digits][e±exp]` and panics otherwise
+  (`invalid float literal`).
+- `int(x)` converts `f64` by truncating toward zero; `nan` and out-of-range
+  values panic.
+- Comparisons and `==` require both sides to be `f64` (`E0308`/`E0369`),
+  except that `nan == nan` is simply `false`.
+
+### 11.3 Formatting
+
+`print` and `str` use the shortest decimal string that round-trips back to
+the same double, always showing a fractional part or an exponent:
+
+```text
+2.0      0.1      0.30000000000000004      1e+16
+1000000000000000.0     2.5e-07     5e-324     inf     nan
+```
+
+Fixed notation holds for magnitudes below `1e16`, scientific notation from
+`1e16` up and below `1e-4`. Negative zero prints as `-0.0`.
+
+## 12. Built-ins
 
 | Function | Signature | Notes |
 | --- | --- | --- |
 | `print(x)` | any -> nil | One argument, newline-terminated. |
 | `len(x)` | str/list[T]/dict[K, V] -> int | |
 | `str(x)` | any -> str | Debug formatting. |
-| `int(x)` | str/int -> int | Strict parse; panics on invalid digits. |
+| `int(x)` | str/int/f64 -> int | Strict parse; panics on invalid digits. `f64` truncates toward zero. |
+| `f64(x)` | str/int/f64 -> f64 | Conversion or strict parse; see §11. |
 | `chr(i)` | int -> str | Panics outside Unicode scalar range. |
 | `ord(s)` | str -> int | Requires a one-character string. |
 | `push(l, v)` | list[T], T -> list[T] | Appends in place. |
@@ -335,6 +398,11 @@ Semantics:
 | `args()` | -> list[str] | Arguments after `--`; program arguments in a native binary. |
 | `fatal(msg)` | str -> never | Prints `msg` to stderr, exit code 1. |
 | `exit(code)` | int -> never | Terminates with `code`. |
+| `abs(x)` | int -> int, f64 -> f64 | Absolute value. |
+| `sqrt(x)` | f64 -> f64 | `sqrt` of a negative is `nan`. |
+| `floor(x)` / `ceil(x)` | f64 -> f64 | |
+| `round(x)` | f64 -> f64 | Half away from zero. |
+| `pow(a, b)` | f64, f64 -> f64 | C `pow`. |
 | `range(...)` | int -> iterable | Only in `for`. |
 | `alloc(n, fill)` | int, T -> ptr[T] | See §8. |
 | `arena_new()` | -> Arena | See §8. |
@@ -347,15 +415,18 @@ Semantics:
 
 ```text
 42
+2.5
+1e+16
 "quoted\n"
 [1, 2, 3]
+[1.5, 2.0]
 {"a": 1, "b": 2}
 Point { x: 1, y: 2 }
 <ptr>
 <arena>
 ```
 
-## 12. Panics
+## 13. Panics
 
 Runtime contract violations abort the process with exit code `101` and a
 message on stderr:
@@ -364,11 +435,14 @@ message on stderr:
 panic: index out of bounds: the len is 3 but the index is 5
 panic: attempt to divide by zero
 panic: invalid digit found in string
+panic: invalid float literal
+panic: cannot parse float from empty string
+panic: cannot convert `nan` to `int`
 panic: no key `x` in dict
 panic: method `bump` takes 1 argument(s) but 2 were given
 ```
 
-## 13. The strict compiler
+## 14. The strict compiler
 
 `mandela check` performs full static checking and reports every error in one
 pass — error code, file, line, column and a caret under the offending token —
@@ -412,7 +486,7 @@ error: expected `(`, found identifier `x`
   |         ^
 ```
 
-## 14. The toolchain and code generation
+## 15. The toolchain and code generation
 
 `mandela build program.mnd` produces a native executable:
 
@@ -431,7 +505,7 @@ writes the assembly listing, `--emit bin` (default) writes the executable.
 `mandela run` executes programs on the bootstrap interpreter after the same
 check; the two backends are kept output-identical by the test suite.
 
-Memory model in v0.4: runtime objects (strings, lists, dicts, structs) are
+Memory model in v0.5: runtime objects (strings, lists, dicts, structs) are
 allocated from a process-wide arena and live for the duration of the process.
 Bulk buffers are explicit: `alloc`/`arena_alloc` hand out pointer views over
 arena slots, and `arena_free` releases a whole region at once. Individual

@@ -5,6 +5,7 @@ Exists only to run the self-hosted compiler (src/*.mnd) and user programs
 until the toolchain emits native code. Not part of the language itself.
 """
 
+import math
 import sys
 import threading
 
@@ -147,12 +148,28 @@ def tokenize(src):
             col = wchars + j + 1
             if c.isdigit():
                 k = j
-                v = 0
                 while k < n and content[k].isdigit():
-                    v = v * 10 + ord(content[k]) - 48
                     k += 1
+                if k + 1 < n and content[k] == "." and content[k + 1].isdigit():
+                    k += 1
+                    while k < n and content[k].isdigit():
+                        k += 1
+                    if k < n and content[k] in "eE":
+                        m = k + 1
+                        if m < n and content[m] in "+-":
+                            m += 1
+                        if m < n and content[m].isdigit():
+                            k = m
+                            while k < n and content[k].isdigit():
+                                k += 1
+                    toks.append(("fnum", float(content[j:k]), ln, col))
+                    j = k
+                    continue
+                v = 0
+                while j < k:
+                    v = v * 10 + ord(content[j]) - 48
+                    j += 1
                 toks.append(("int", v, ln, col))
-                j = k
                 continue
             if c.isalpha() or c == "_":
                 k = j
@@ -235,6 +252,8 @@ def describe(t):
         return "identifier `%s`" % v
     if tt == "int":
         return "integer `%d`" % v
+    if tt == "fnum":
+        return "floating-point `%s`" % v
     if tt == "str":
         return "string literal"
     if tt == "nl":
@@ -579,6 +598,9 @@ class Parser:
         if t[0] == "int":
             self.next()
             return ["num", t[1], t[2], t[3]]
+        if t[0] == "fnum":
+            self.next()
+            return ["fnum", t[1], t[2], t[3]]
         if t[0] == "str":
             self.next()
             return ["str", t[1], t[2], t[3]]
@@ -668,6 +690,8 @@ def type_name(v):
         return "bool"
     if isinstance(v, int):
         return "int"
+    if isinstance(v, float):
+        return "f64"
     if isinstance(v, str):
         return "str"
     if isinstance(v, list):
@@ -685,6 +709,76 @@ def type_name(v):
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def is_f64(v):
+    return isinstance(v, float)
+
+
+def fdiv(l, r):
+    """IEEE 754 division: 1.0/0.0 is inf, 0.0/0.0 is nan (Python raises)."""
+    if r != 0.0:
+        return l / r
+    if l != l or l == 0.0:
+        return float("nan")
+    return math.copysign(math.inf, l) * math.copysign(1.0, r)
+
+
+def fmod_(l, r):
+    """C fmod() semantics: fmod(x, 0) and fmod(inf, y) are nan."""
+    if l != l or r != r or math.isinf(l) or r == 0.0:
+        return float("nan")
+    if math.isinf(r):
+        return l
+    return math.fmod(l, r)
+
+
+def c_round(v):
+    """C round(): half away from zero (Python's round() is banker's)."""
+    if v != v or math.isinf(v) or v == 0.0:
+        return v
+    f = math.floor(v)
+    d = v - f
+    if d > 0.5:
+        return float(f + 1)
+    if d < 0.5:
+        return float(f)
+    if v > 0:
+        return float(f + 1)
+    return float(f)
+
+
+def parse_f64_str(s):
+    """Strict decimal grammar: [+-]?(digits[.digits]?|.digits)([eE][+-]digits)?"""
+    if s == "":
+        raise Panic("cannot parse float from empty string")
+    i, n = 0, len(s)
+    if s[i] in "+-":
+        i += 1
+    dig = 0
+    while i < n and "0" <= s[i] <= "9":
+        i += 1
+        dig += 1
+    if i < n and s[i] == ".":
+        i += 1
+        while i < n and "0" <= s[i] <= "9":
+            i += 1
+            dig += 1
+    if dig == 0:
+        raise Panic("invalid float literal")
+    if i < n and (s[i] == "e" or s[i] == "E"):
+        i += 1
+        if i < n and s[i] in "+-":
+            i += 1
+        edig = 0
+        while i < n and "0" <= s[i] <= "9":
+            i += 1
+            edig += 1
+        if edig == 0:
+            raise Panic("invalid float literal")
+    if i != n:
+        raise Panic("invalid float literal")
+    return float(s)
 
 
 def wrap64(v):
@@ -730,6 +824,8 @@ def ml_eq(a, b):
         if not (isinstance(a, MndPtr) and isinstance(b, MndPtr)):
             return False
         return a.slots is b.slots and a.off == b.off
+    if isinstance(a, float) or isinstance(b, float):
+        return isinstance(a, float) and isinstance(b, float) and a == b
     return a == b
 
 
@@ -759,6 +855,8 @@ def format_value(v, nested=False):
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
         return str(v)
     if isinstance(v, str):
         if nested:
@@ -816,6 +914,12 @@ def bi_int(args, ip):
     v = one_arg(args, "int()")
     if is_int(v):
         return v
+    if isinstance(v, float):
+        if v != v:
+            raise Panic("cannot convert `nan` to `int`")
+        if v >= 9223372036854775808.0 or v < -9223372036854775808.0:
+            raise Panic("number too large to fit in target type")
+        return math.trunc(v)
     if isinstance(v, str):
         s = v
         neg = False
@@ -852,6 +956,89 @@ def bi_ord(args, ip):
     if len(v) != 1:
         raise Panic("expected a single-character string in ord()")
     return ord(v)
+
+
+def bi_f64(args, ip):
+    v = one_arg(args, "f64()")
+    if is_f64(v):
+        return v
+    if is_int(v):
+        return float(v)
+    if isinstance(v, str):
+        return parse_f64_str(v)
+    raise Panic("expected `str`, `int` or `f64` in f64(), found `%s`" % type_name(v))
+
+
+def bi_abs(args, ip):
+    v = one_arg(args, "abs()")
+    if is_int(v):
+        return wrap64(abs(v))
+    if is_f64(v):
+        return abs(v)
+    raise Panic("expected `int` or `f64` in abs(), found `%s`" % type_name(v))
+
+
+def bi_sqrt(args, ip):
+    v = one_arg(args, "sqrt()")
+    if not is_f64(v):
+        raise Panic("expected `f64` in sqrt(), found `%s`" % type_name(v))
+    if v < 0.0:
+        return float("nan")
+    return math.sqrt(v)
+
+
+def bi_floor(args, ip):
+    v = one_arg(args, "floor()")
+    if not is_f64(v):
+        raise Panic("expected `f64` in floor(), found `%s`" % type_name(v))
+    if v != v or math.isinf(v) or v == 0.0:
+        return v
+    return float(math.floor(v))
+
+
+def bi_ceil(args, ip):
+    v = one_arg(args, "ceil()")
+    if not is_f64(v):
+        raise Panic("expected `f64` in ceil(), found `%s`" % type_name(v))
+    if v != v or math.isinf(v) or v == 0.0:
+        return v
+    return float(math.ceil(v))
+
+
+def bi_round(args, ip):
+    v = one_arg(args, "round()")
+    if not is_f64(v):
+        raise Panic("expected `f64` in round(), found `%s`" % type_name(v))
+    return c_round(v)
+
+
+def fpow(a, b):
+    """math.pow() wrapped to C pow() semantics (inf/nan instead of raising)."""
+    try:
+        return math.pow(a, b)
+    except OverflowError:
+        neg = (math.copysign(1.0, a) < 0 and b == math.floor(b)
+               and int(b) % 2 == 1)
+        return math.copysign(math.inf, -1.0 if neg else 1.0)
+    except ValueError:
+        if a == 0.0 and b < 0.0:
+            if (math.copysign(1.0, a) < 0 and b == math.floor(b)
+                    and int(b) % 2 == 1):
+                return float("-inf")
+            return float("inf")
+        return float("nan")
+    except ZeroDivisionError:
+        return float("inf")
+
+
+def bi_pow(args, ip):
+    if len(args) != 2:
+        raise Panic("pow() takes exactly 2 arguments but %d were given" % len(args))
+    a, b = args
+    if not (is_f64(a) and is_f64(b)):
+        raise Panic("pow() expects two `f64` arguments, found `%s` and `%s`"
+                    % (type_name(a), type_name(b)))
+    return fpow(a, b)
 
 
 def bi_push(args, ip):
@@ -1152,12 +1339,15 @@ def call_dict_method(d, name, args):
 
 BUILTINS = {
     "print": bi_print, "eprint": bi_eprint, "len": bi_len, "str": bi_str,
-    "int": bi_int, "chr": bi_chr, "ord": bi_ord, "push": bi_push, "pop": bi_pop,
+    "int": bi_int, "f64": bi_f64, "chr": bi_chr, "ord": bi_ord,
+    "push": bi_push, "pop": bi_pop,
     "split": bi_split, "substr": bi_substr, "read_file": bi_read_file,
     "write_file": bi_write_file, "args": lambda a, ip: list(ip.argv),
     "fatal": bi_fatal, "exit": bi_exit, "range": bi_range,
     "alloc": bi_alloc, "arena_new": bi_arena_new, "arena_alloc": bi_arena_alloc,
     "arena_free": bi_arena_free, "ptr_len": bi_ptr_len, "is_null": bi_is_null,
+    "abs": bi_abs, "sqrt": bi_sqrt, "floor": bi_floor, "ceil": bi_ceil,
+    "round": bi_round, "pow": bi_pow,
 }
 
 
@@ -1295,7 +1485,7 @@ class Interp:
 
     def eval(self, node, env):
         tag = node[0]
-        if tag == "num" or tag == "str" or tag == "bool":
+        if tag == "num" or tag == "fnum" or tag == "str" or tag == "bool":
             return node[1]
         if tag == "nil":
             return None
@@ -1352,6 +1542,8 @@ class Interp:
         if tag == "un":
             v = self.eval(node[2], env)
             if node[1] == "-":
+                if is_f64(v):
+                    return -v
                 if not is_int(v):
                     raise Panic("cannot apply unary `-` to type `%s`" % type_name(v))
                 return wrap64(-v)
@@ -1462,6 +1654,8 @@ class Interp:
                 return l + r
             if isinstance(l, MndPtr) and is_int(r):
                 return MndPtr(l.slots, l.ln, l.off + r, l.owner)
+            if is_f64(l) and is_f64(r):
+                return l + r
             if is_int(l) and is_int(r):
                 return wrap64(l + r)
             raise Panic("cannot apply operator `+` to types `%s` and `%s`"
@@ -1469,6 +1663,14 @@ class Interp:
         if op == "-" and isinstance(l, MndPtr) and is_int(r):
             return MndPtr(l.slots, l.ln, l.off - r, l.owner)
         if op in ("-", "*", "/", "%"):
+            if is_f64(l) and is_f64(r):
+                if op == "-":
+                    return l - r
+                if op == "*":
+                    return l * r
+                if op == "/":
+                    return fdiv(l, r)
+                return fmod_(l, r)
             if not (is_int(l) and is_int(r)):
                 raise Panic("cannot apply operator `%s` to types `%s` and `%s`"
                             % (op, type_name(l), type_name(r)))
@@ -1490,7 +1692,8 @@ class Interp:
         if op == "!=":
             return not ml_eq(l, r)
         if op in ("<", "<=", ">", ">="):
-            ok = (is_int(l) and is_int(r)) or (isinstance(l, str) and isinstance(r, str))
+            ok = ((is_int(l) and is_int(r)) or (is_f64(l) and is_f64(r))
+                  or (isinstance(l, str) and isinstance(r, str)))
             if not ok:
                 raise Panic("cannot compare `%s` with `%s`" % (type_name(l), type_name(r)))
             if op == "<":

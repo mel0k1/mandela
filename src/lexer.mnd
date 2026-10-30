@@ -87,11 +87,29 @@ def lx_line(st: list[str], content: str, basecol: int):
         else:
             let col = basecol + j + 1
             if lx_is_digit(c):
-                let mut v = 0
-                while j < n and lx_is_digit(content[j]):
-                    v = v * 10 + ord(content[j]) - 48
-                    j = j + 1
-                lx_emit(st, "int", v, line, col)
+                let mut k = j
+                while k < n and lx_is_digit(content[k]):
+                    k = k + 1
+                if k + 1 < n and content[k] == "." and lx_is_digit(content[k + 1]):
+                    k = k + 1
+                    while k < n and lx_is_digit(content[k]):
+                        k = k + 1
+                    if k < n and (content[k] == "e" or content[k] == "E"):
+                        let mut m2 = k + 1
+                        if m2 < n and (content[m2] == "+" or content[m2] == "-"):
+                            m2 = m2 + 1
+                        if m2 < n and lx_is_digit(content[m2]):
+                            k = m2
+                            while k < n and lx_is_digit(content[k]):
+                                k = k + 1
+                    lx_emit(st, "fnum", f64(substr(content, j, k - j)), line, col)
+                    j = k
+                else:
+                    let mut v = 0
+                    while j < k:
+                        v = v * 10 + ord(content[j]) - 48
+                        j = j + 1
+                    lx_emit(st, "int", v, line, col)
             elif lx_is_ident_start(c):
                 let mut w = ""
                 while j < n and lx_is_ident_char(content[j]):

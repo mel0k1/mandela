@@ -1,0 +1,2 @@
+let d: dict[f64, int] = {1.5: 2}
+print(d)

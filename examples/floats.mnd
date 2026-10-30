@@ -1,0 +1,48 @@
+# Числа с плавающей точкой: тип f64 (IEEE 754 double)
+
+let radius = 2.5
+let pi = 3.14159
+print(pi * radius * radius)        # 19.6349375
+
+# Литералы: 2.5, 1.5e-3; int и f64 не смешиваются неявно
+let half = 0.5
+print(half * 2.0)                  # 1.0
+
+# Деление на ноль не паникует — IEEE: inf и nan
+print(1.0 / 0.0)                   # inf
+print(0.0 / 0.0)                   # nan
+
+# Явные конверсии: f64(x) и int(x) (усечение к нулю)
+let n = 7
+print(f64(n) / 2.0)                # 3.5
+print(int(3.9))                    # 3
+
+# Математика
+print(sqrt(2.0))                   # 1.4142135623730951
+print(pow(2.0, 10.0))              # 1024.0
+print(abs(-2.5))                   # 2.5
+print(floor(2.7))                  # 2.0
+
+def hypot(a: f64, b: f64) -> f64:
+    return sqrt(a * a + b * b)
+
+print(hypot(3.0, 4.0))             # 5.0
+
+# f64 в списках, словарях, структурах
+struct Point:
+    x: f64
+    y: f64
+
+    def dist2(self, o: Point) -> f64:
+        let dx = self.x - o.x
+        let dy = self.y - o.y
+        return dx * dx + dy * dy
+
+let p = Point { x: 0.0, y: 0.0 }
+let q = Point { x: 3.0, y: 4.0 }
+print(sqrt(p.dist2(q)))            # 5.0
+
+let mut sum = 0.0
+for v in [0.5, 1.5, 2.5]:
+    sum = sum + v
+print(sum / 3.0)                   # 1.5
