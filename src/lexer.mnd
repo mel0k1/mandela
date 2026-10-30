@@ -1,6 +1,7 @@
 def lx_keywords() -> list[str]:
     return ["def", "return", "if", "elif", "else", "while", "for", "in", "let",
-            "mut", "true", "false", "nil", "and", "or", "not", "break", "continue"]
+            "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
+            "struct"]
 
 def lx_is_kw(w: str) -> bool:
     for k in lx_keywords():
@@ -122,7 +123,16 @@ def lx_line(st: list[str], content: str, basecol: int):
                     if st[2] > 0:
                         st[2] = st[2] - 1
                     j = j + 1
-                elif c == "," or c == ":":
+                elif c == "{":
+                    lx_emit(st, "op", c, line, col)
+                    st[2] = st[2] + 1
+                    j = j + 1
+                elif c == "}":
+                    lx_emit(st, "op", c, line, col)
+                    if st[2] > 0:
+                        st[2] = st[2] - 1
+                    j = j + 1
+                elif c == "." or c == "," or c == ":":
                     lx_emit(st, "op", c, line, col)
                     j = j + 1
                 else:
