@@ -61,7 +61,32 @@ def ck_valid_type(t: str) -> bool:
         return true
     if len(t) >= 7 and substr(t, 0, 5) == "list[" and substr(t, len(t) - 1, 1) == "]":
         return ck_valid_type(substr(t, 5, len(t) - 6))
+    if len(t) >= 8 and substr(t, 0, 5) == "dict[" and substr(t, len(t) - 1, 1) == "]":
+        let kv = ck_split_kv(substr(t, 5, len(t) - 6))
+        if kv == nil:
+            return false
+        return ck_valid_type(kv[0]) and ck_valid_type(kv[1])
     return false
+
+def ck_split_kv(s: str) -> list[str]:
+    let mut depth = 0
+    let mut i = 0
+    while i < len(s):
+        let c = s[i]
+        if c == "[":
+            depth = depth + 1
+        elif c == "]":
+            depth = depth - 1
+        elif c == "," and depth == 0:
+            return [substr(s, 0, i), substr(s, i + 1, len(s) - i - 1)]
+        i = i + 1
+    return nil
+
+def ck_dict_kv(t: str) -> list[str]:
+    let kv = ck_split_kv(substr(t, 5, len(t) - 6))
+    if kv == nil:
+        return ["int", "int"]
+    return kv
 
 def ck_elem(t: str) -> str:
     return substr(t, 5, len(t) - 6)
@@ -267,13 +292,13 @@ def ck_let(node: list[str]):
     if ann != "":
         if not ck_valid_type(ann):
             ck_err("E0412", "cannot find type `" + ann + "` in this scope", node[5], node[6])
-        if t == "list[_]":
+        if t == "list[_]" or t == "dict[_,_]":
             let lit = node[3]
             lit[len(lit) - 1] = ann
             t = ann
         elif t != ann:
             ck_err("E0308", "mismatched types: expected `" + ann + "`, found `" + t + "`", node[5], node[6])
-    elif t == "list[_]":
+    elif t == "list[_]" or t == "dict[_,_]":
         ck_err("E0282", "type annotations needed", node[5], node[6])
     ck_declare(node[1], t, node[4], "let", node[5], node[6])
 
@@ -292,6 +317,9 @@ def ck_assign(node: list[str]):
         if rt == "list[_]":
             let lit = node[2]
             lit[len(lit) - 1] = e[1]
+        elif rt == "dict[_,_]":
+            let lit = node[2]
+            lit[len(lit) - 1] = e[1]
         elif rt != e[1]:
             ck_err("E0308", "mismatched types: expected `" + e[1] + "`, found `" + rt + "`", target[2], target[3])
     elif target[0] == "field":
@@ -299,20 +327,32 @@ def ck_assign(node: list[str]):
     else:
         let bt = ck_expr(target[1])
         let it = ck_expr(target[2])
-        if it != "int":
-            ck_err("E0308", "mismatched types: index must be `int`, found `" + it + "`", target[3], target[4])
-        if bt == "str":
-            ck_err("E0594", "`str` is immutable: cannot assign to a string index", target[3], target[4])
-        elif bt != "list[_]" and substr(bt, 0, 5) != "list[":
-            ck_err("E0308", "cannot assign to an index of type `" + bt + "`", target[3], target[4])
-        else:
-            let et = ck_elem(bt)
+        if substr(bt, 0, 5) == "dict[":
+            let kv = ck_dict_kv(bt)
+            if it != kv[0]:
+                ck_err("E0308", "mismatched types: expected a `" + kv[0] + "` key, found `" + it + "`", target[3], target[4])
+            let et = kv[1]
             let rt = ck_expr(node[2])
-            if rt == "list[_]":
+            if rt == "list[_]" or rt == "dict[_,_]":
                 let lit = node[2]
                 lit[len(lit) - 1] = et
             elif rt != et:
                 ck_err("E0308", "mismatched types: expected `" + et + "`, found `" + rt + "`", target[3], target[4])
+        else:
+            if it != "int":
+                ck_err("E0308", "mismatched types: index must be `int`, found `" + it + "`", target[3], target[4])
+            if bt == "str":
+                ck_err("E0594", "`str` is immutable: cannot assign to a string index", target[3], target[4])
+            elif bt != "list[_]" and substr(bt, 0, 5) != "list[":
+                ck_err("E0308", "cannot assign to an index of type `" + bt + "`", target[3], target[4])
+            else:
+                let et = ck_elem(bt)
+                let rt = ck_expr(node[2])
+                if rt == "list[_]" or rt == "dict[_,_]":
+                    let lit = node[2]
+                    lit[len(lit) - 1] = et
+                elif rt != et:
+                    ck_err("E0308", "mismatched types: expected `" + et + "`, found `" + rt + "`", target[3], target[4])
 
 def ck_assign_field(node: list[str], target: list[str]):
     let bt = ck_expr(target[1])
@@ -349,7 +389,7 @@ def ck_return(node: list[str]):
     let t = ck_expr(node[1])
     if c_ret == "":
         ck_err("E0308", "this function has no return type, so it cannot return a value", node[2], node[3])
-    elif t == "list[_]":
+    elif t == "list[_]" or t == "dict[_,_]":
         let lit = node[1]
         lit[len(lit) - 1] = c_ret
     elif t != c_ret:
@@ -366,6 +406,8 @@ def ck_for(node: list[str]):
         ck_declare(node[1], "int", false, "loopvar", node[4], node[5])
     elif vt == "str":
         ck_declare(node[1], "str", false, "loopvar", node[4], node[5])
+    elif substr(vt, 0, 5) == "dict[":
+        ck_declare(node[1], ck_dict_kv(vt)[0], false, "loopvar", node[4], node[5])
     elif substr(vt, 0, 5) == "list[":
         ck_declare(node[1], ck_elem(vt), false, "loopvar", node[4], node[5])
     else:
@@ -398,6 +440,8 @@ def ck_expr(node: list[str]) -> str:
             t = e[1]
     elif tag == "list":
         t = ck_list(node)
+    elif tag == "dict":
+        t = ck_dict(node)
     elif tag == "call":
         t = ck_call(node)
     elif tag == "field":
@@ -418,15 +462,21 @@ def ck_expr(node: list[str]) -> str:
     elif tag == "index":
         let bt = ck_expr(node[1])
         let it = ck_expr(node[2])
-        if it != "int":
-            ck_err("E0308", "mismatched types: index must be `int`, found `" + it + "`", node[3], node[4])
-        if bt == "str":
-            t = "str"
-        elif bt == "list[_]" or substr(bt, 0, 5) == "list[":
-            t = ck_elem(bt)
+        if substr(bt, 0, 5) == "dict[":
+            let kv = ck_dict_kv(bt)
+            if it != kv[0]:
+                ck_err("E0308", "mismatched types: expected a `" + kv[0] + "` key, found `" + it + "`", node[3], node[4])
+            t = kv[1]
         else:
-            ck_err("E0277", "cannot index into a value of type `" + bt + "`", node[3], node[4])
-            t = "int"
+            if it != "int":
+                ck_err("E0308", "mismatched types: index must be `int`, found `" + it + "`", node[3], node[4])
+            if bt == "str":
+                t = "str"
+            elif bt == "list[_]" or substr(bt, 0, 5) == "list[":
+                t = ck_elem(bt)
+            else:
+                ck_err("E0277", "cannot index into a value of type `" + bt + "`", node[3], node[4])
+                t = "int"
     elif tag == "bin":
         t = ck_bin(node)
     elif tag == "un":
@@ -455,6 +505,29 @@ def ck_list(node: list[str]) -> str:
             ck_err("E0308", "mismatched types in a list literal: expected `" + t0 + "`, found `" + xt + "`", pos[0], pos[1])
         i = i + 1
     return "list[" + t0 + "]"
+
+def ck_dict(node: list[str]) -> str:
+    if len(node[1]) == 0:
+        return "dict[_,_]"
+    let p0 = node[1][0]
+    let k0 = ck_expr(p0[0])
+    if k0 != "str" and k0 != "int":
+        let pos = ck_node_pos(p0[0])
+        ck_err("E0308", "dict key must be `str` or `int`, found `" + k0 + "`", pos[0], pos[1])
+    let v0 = ck_expr(p0[1])
+    let mut i = 1
+    while i < len(node[1]):
+        let p = node[1][i]
+        let kt = ck_expr(p[0])
+        if kt != k0:
+            let pos = ck_node_pos(p[0])
+            ck_err("E0308", "mismatched types in a dict literal: expected `" + k0 + "`, found `" + kt + "`", pos[0], pos[1])
+        let vt = ck_expr(p[1])
+        let vpos = ck_node_pos(p[1])
+        if vt != v0:
+            ck_err("E0308", "mismatched types in a dict literal: expected `" + v0 + "`, found `" + vt + "`", vpos[0], vpos[1])
+        i = i + 1
+    return "dict[" + k0 + "," + v0 + "]"
 
 def ck_bin(node: list[str]) -> str:
     let op = node[1]
@@ -534,6 +607,10 @@ def ck_method_call(node: list[str], fnode: list[str]) -> str:
     let args = node[2]
     let pos = [node[3], node[4]]
     let rt = ck_expr(fnode[1])
+    if rt == "str":
+        return ck_str_method(node, fnode)
+    if substr(rt, 0, 5) == "dict[":
+        return ck_dict_method(node, fnode, rt)
     let sd = ck_find_struct(rt)
     let m = nil
     if sd == nil:
@@ -570,6 +647,74 @@ def ck_method_call(node: list[str], fnode: list[str]) -> str:
         return "nil"
     return m[2]
 
+def ck_str_methods() -> list[str]:
+    return [["upper", "str"], ["lower", "str"], ["trim", "str"],
+            ["split", "list[str]", "str"], ["contains", "bool", "str"],
+            ["starts_with", "bool", "str"], ["ends_with", "bool", "str"],
+            ["replace", "str", "str", "str"], ["find", "int", "str"],
+            ["substr", "str", "int", "int"], ["repeat", "str", "int"],
+            ["chars", "list[str]"]]
+
+def ck_str_method(node: list[str], fnode: list[str]) -> str:
+    let mname = fnode[2]
+    let m = nil
+    for e in ck_str_methods():
+        if e[0] == mname:
+            m = e
+    if m == nil:
+        ck_err("E0599", "no method named `" + mname + "` found for type `str`", fnode[3], fnode[4])
+        for a in node[2]:
+            ck_expr(a)
+        return "int"
+    let want = len(m) - 2
+    let n = len(node[2])
+    if n != want:
+        ck_err("E0061", "this function takes " + arg_word(want) + " but " + str(n) + " arguments were supplied", node[3], node[4])
+    let mut i = 0
+    while i < n and i < want:
+        let at = ck_expr(node[2][i])
+        let pt = m[i + 2]
+        if at == "list[_]":
+            let lit = node[2][i]
+            lit[len(lit) - 1] = pt
+        elif at != pt:
+            let apos = ck_node_pos(node[2][i])
+            ck_err("E0308", "mismatched types: expected `" + pt + "`, found `" + at + "`", apos[0], apos[1])
+        i = i + 1
+    return m[1]
+
+def ck_dict_method(node: list[str], fnode: list[str], rt: str) -> str:
+    let mname = fnode[2]
+    let kv = ck_dict_kv(rt)
+    let k = kv[0]
+    let v = kv[1]
+    let n = len(node[2])
+    if mname == "keys" or mname == "values":
+        if n != 0:
+            ck_err("E0061", "this function takes 0 arguments but " + str(n) + " were supplied", node[3], node[4])
+        for a in node[2]:
+            ck_expr(a)
+        if mname == "keys":
+            return "list[" + k + "]"
+        return "list[" + v + "]"
+    if mname == "has" or mname == "remove":
+        if n != 1:
+            ck_err("E0061", "this function takes 1 argument but " + str(n) + " arguments were supplied", node[3], node[4])
+        if n >= 1:
+            let at = ck_expr(node[2][0])
+            if at != k:
+                let apos = ck_node_pos(node[2][0])
+                ck_err("E0308", "mismatched types: expected a `" + k + "` key, found `" + at + "`", apos[0], apos[1])
+        if mname == "remove" and fnode[1][0] == "var":
+            let e = ck_lookup(fnode[1][1])
+            if e != nil and not e[2]:
+                ck_err("E0596", "cannot call mutating method `remove` on `" + fnode[1][1] + "`, as it is not declared as mutable", fnode[3], fnode[4])
+        return "bool"
+    ck_err("E0599", "no method named `" + mname + "` found for type `" + rt + "`", fnode[3], fnode[4])
+    for a in node[2]:
+        ck_expr(a)
+    return "int"
+
 def ck_call(node: list[str]) -> str:
     let fnode = node[1]
     let args = node[2]
@@ -591,8 +736,8 @@ def ck_call(node: list[str]) -> str:
     if name == "len":
         ck_arity(1, n, pos)
         let t = ck_expr(args[0])
-        if t != "str" and substr(t, 0, 5) != "list[":
-            ck_err("E0308", "expected `str` or a list, found `" + t + "`", pos[0], pos[1])
+        if t != "str" and substr(t, 0, 5) != "list[" and substr(t, 0, 5) != "dict[":
+            ck_err("E0308", "expected `str`, a list or a dict, found `" + t + "`", pos[0], pos[1])
         return "int"
     if name == "str":
         ck_arity(1, n, pos)
