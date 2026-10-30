@@ -1,0 +1,19 @@
+let mut i = 0
+let mut hits = 0
+while true:
+    i = i + 1
+    if i % 2 == 0:
+        continue
+    if i > 9:
+        break
+    hits = hits + i
+print(hits)
+print(7 % 3)
+print(-7 / 2)
+print(-7 % 2)
+print(not (1 > 2))
+if 1 < 2 and 2 < 3 or false:
+    print("logic ok")
+let mut nested: list[list[int]] = [[1, 2], [3, 4]]
+nested[0][1] = 20
+print(nested)

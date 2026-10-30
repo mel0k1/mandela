@@ -1,0 +1,18 @@
+def mandel_row(cy: int) -> str:
+    let mut out = ""
+    for px in range(0, 70):
+        let cx = -2000 + px * 3600 / 69
+        let mut x = 0
+        let mut y = 0
+        let mut it = 0
+        while it < 19 and x * x / 1000 + y * y / 1000 <= 4000:
+            let t = x * x / 1000 - y * y / 1000 + cx
+            y = 2 * x * y / 1000 + cy
+            x = t
+            it = it + 1
+        let shades = " .:-=+*#%@"
+        out = out + shades[it / 2]
+    return out
+
+for py in range(0, 21):
+    print(mandel_row(-1200 + py * 2600 / 20))

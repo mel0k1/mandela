@@ -1,0 +1,10 @@
+let nums: list[int] = [5, 3, 8, 1]
+push(nums, 7)
+let mut total = 0
+for x in nums:
+    total = total + x
+print(total)
+print(len(nums))
+pop(nums)
+print(nums)
+print(nums[2])
