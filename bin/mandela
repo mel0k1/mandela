@@ -3,11 +3,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="$ROOT/bootstrap/mandela.py"
+CODEGEN="$ROOT/bootstrap/codegen.py"
 SRCS=("$ROOT/src/err.mnd" "$ROOT/src/lexer.mnd" "$ROOT/src/parser.mnd" "$ROOT/src/checker.mnd" "$ROOT/src/main.mnd")
 
 usage() {
-    echo "Mandela v0.2"
-    echo "usage: mandela <run|check|lex|ast> <file.mnd> [args...]"
+    echo "Mandela v0.3"
+    echo "usage: mandela <run|check|build|lex|ast> <file.mnd> [args...]"
+    echo "       mandela build <file.mnd> [-o out] [--emit c|asm|bin]"
 }
 
 cmd="${1:-}"
@@ -29,6 +31,13 @@ case "$cmd" in
         shift
         python3 "$HOST" "${SRCS[@]}" -- check "$f"
         exec python3 "$HOST" "$f" -- "$@"
+        ;;
+    build)
+        f="${1:-}"
+        if [ -z "$f" ]; then usage; exit 1; fi
+        shift
+        python3 "$HOST" "${SRCS[@]}" -- check "$f"
+        exec python3 "$CODEGEN" "$f" "$@"
         ;;
     *)
         usage
