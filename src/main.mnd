@@ -48,7 +48,7 @@ def dbg_sexpr(n: list[str]) -> str:
         for br in n[1]:
             s = s + " " + dbg_sexpr(br[0]) + " " + dbg_block(br[1])
         if n[2] != nil:
-            s = s + " (else" + dbg_block(n[2]) + ")"
+            s = s + " " + dbg_block(n[2])
         return s + ")"
     if tag == "while":
         return "(while " + dbg_sexpr(n[1]) + " " + dbg_block(n[2]) + ")"
