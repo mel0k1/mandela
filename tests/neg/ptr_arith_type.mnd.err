@@ -1,0 +1,1 @@
+error[E0369]: cannot apply operator `+` to types `ptr[int]` and `str`

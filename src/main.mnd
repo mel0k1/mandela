@@ -62,6 +62,8 @@ def dbg_sexpr(n: list[str]) -> str:
         return "(while " + dbg_sexpr(n[1]) + " " + dbg_block(n[2]) + ")"
     if tag == "for":
         return "(for " + n[1] + " in " + dbg_sexpr(n[2]) + " " + dbg_block(n[3]) + ")"
+    if tag == "unsafe":
+        return "(unsafe " + dbg_block(n[1]) + ")"
     if tag == "return":
         if n[1] == nil:
             return "(return)"

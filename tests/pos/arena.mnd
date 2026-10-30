@@ -1,0 +1,47 @@
+# arenas: explicit regions, bulk free, byte accounting
+def fill_squares(p: ptr[int], n: int):
+    unsafe:
+        for i in range(0, n):
+            p[i] = i * i
+
+def main():
+    let a = arena_new()
+    let xs: ptr[int] = arena_alloc(a, 8, 0)
+    fill_squares(xs, 8)
+    unsafe:
+        print(xs[3])
+        print(xs[7])
+        print(ptr_len(xs))
+    unsafe:
+        print(arena_free(a))
+
+    let b = arena_new()
+    let names: ptr[str] = arena_alloc(b, 2, "none")
+    unsafe:
+        names[0] = "alpha"
+        names[1] = "beta"
+        print(names[0])
+        print(names[1])
+    let ys: ptr[int] = arena_alloc(b, 3, 5)
+    unsafe:
+        print(ys[1])
+    print(ptr_len(ys))
+    unsafe:
+        print(arena_free(b))
+
+    let c = arena_new()
+    let pts: ptr[Point] = arena_alloc(c, 2, Point { x: 1, y: 2 })
+    unsafe:
+        print(pts[0].x)
+        print(pts[1].y)
+        pts[1].x = 42
+        print(pts[1].x)
+    unsafe:
+        print(arena_free(c))
+    print(arena_new() == arena_new())
+
+struct Point:
+    x: int
+    y: int
+
+main()

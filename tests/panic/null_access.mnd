@@ -1,0 +1,5 @@
+def main():
+    let p: ptr[int] = nil
+    unsafe:
+        print(ptr_len(p))
+main()

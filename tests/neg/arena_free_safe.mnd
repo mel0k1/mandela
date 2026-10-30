@@ -1,0 +1,4 @@
+def main():
+    let a = arena_new()
+    print(arena_free(a))
+main()

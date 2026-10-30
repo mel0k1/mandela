@@ -137,6 +137,11 @@ def p_type() -> str:
         let v = p_type()
         p_expect("op", "]", "`]`")
         return "dict[" + k + "," + v + "]"
+    if t[1] == "ptr":
+        p_expect("op", "[", "`[` after `ptr`")
+        let inner = p_type()
+        p_expect("op", "]", "`]`")
+        return "ptr[" + inner + "]"
     return t[1]
 
 def p_block() -> list[str]:
@@ -167,7 +172,14 @@ def p_stmt() -> list[str]:
         return p_while()
     if p_at("kw", "for"):
         return p_for()
+    if p_at("kw", "unsafe"):
+        return p_unsafe()
     return p_simple()
+
+def p_unsafe() -> list[str]:
+    let t = p_next()
+    let body = p_block()
+    return ["unsafe", body, t[2], t[3]]
 
 def p_simple() -> list[str]:
     let mut node = nil

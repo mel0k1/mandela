@@ -67,10 +67,28 @@ class MndDict:
         self.d = {}
 
 
+class MndArena:
+    __slots__ = ("freed", "total")
+
+    def __init__(self):
+        self.freed = False
+        self.total = 0
+
+
+class MndPtr:
+    __slots__ = ("slots", "ln", "off", "owner")
+
+    def __init__(self, slots, ln, off, owner):
+        self.slots = slots
+        self.ln = ln
+        self.off = off
+        self.owner = owner
+
+
 KEYWORDS = {
     "def", "return", "if", "elif", "else", "while", "for", "in", "let",
     "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
-    "struct",
+    "struct", "unsafe",
 }
 
 OPS2 = ("->", "==", "!=", "<=", ">=")
@@ -344,6 +362,11 @@ class Parser:
             v = self.parse_type()
             self.expect("op", "]", "`]`")
             return "dict[%s,%s]" % (k, v)
+        if t[1] == "ptr":
+            self.expect("op", "[", "`[` after `ptr`")
+            inner = self.parse_type()
+            self.expect("op", "]", "`]`")
+            return "ptr[%s]" % inner
         return t[1]
 
     def parse_block(self):
@@ -375,7 +398,14 @@ class Parser:
             return self.parse_while()
         if self.at("kw", "for"):
             return self.parse_for()
+        if self.at("kw", "unsafe"):
+            return self.parse_unsafe()
         return self.parse_simple()
+
+    def parse_unsafe(self):
+        t = self.next()
+        body = self.parse_block()
+        return ["unsafe", body, t[2], t[3]]
 
     def parse_simple(self):
         if self.at("kw", "let"):
@@ -646,6 +676,10 @@ def type_name(v):
         return "dict"
     if isinstance(v, MStruct):
         return v.sd.name
+    if isinstance(v, MndPtr):
+        return "ptr"
+    if isinstance(v, MndArena):
+        return "arena"
     return type(v).__name__
 
 
@@ -692,11 +726,20 @@ def ml_eq(a, b):
             if k not in b.d or not ml_eq(a.d[k], b.d[k]):
                 return False
         return True
+    if isinstance(a, MndPtr) or isinstance(b, MndPtr):
+        if not (isinstance(a, MndPtr) and isinstance(b, MndPtr)):
+            return False
+        return a.slots is b.slots and a.off == b.off
     return a == b
 
 
 def panic_index(n, i):
     raise Panic("index out of bounds: the len is %d but the index is %d" % (n, i))
+
+
+def ptr_alive(p):
+    if p.owner is not None and p.owner.freed:
+        raise Panic("use after arena_free")
 
 
 def require_list(v):
@@ -733,6 +776,10 @@ def format_value(v, nested=False):
         parts = ["%s: %s" % (format_value(k, True), format_value(x, True))
                  for k, x in v.d.items()]
         return "{" + ", ".join(parts) + "}"
+    if isinstance(v, MndPtr):
+        return "<ptr>"
+    if isinstance(v, MndArena):
+        return "<arena>"
     return str(v)
 
 
@@ -905,6 +952,68 @@ def bi_exit(args, ip):
     raise Fatal(None, code)
 
 
+def bi_alloc(args, ip):
+    if len(args) != 2:
+        raise Panic("alloc() takes exactly 2 arguments but %d were given" % len(args))
+    n, fill = args
+    if not is_int(n):
+        raise Panic("alloc() expects an `int` length, found `%s`" % type_name(n))
+    if n < 0:
+        raise Panic("ptr length must not be negative")
+    return MndPtr([fill] * n, n, 0, None)
+
+
+def bi_arena_new(args, ip):
+    if args:
+        raise Panic("arena_new() takes exactly 0 arguments but %d were given" % len(args))
+    return MndArena()
+
+
+def bi_arena_alloc(args, ip):
+    if len(args) != 3:
+        raise Panic("arena_alloc() takes exactly 3 arguments but %d were given" % len(args))
+    a, n, fill = args
+    if not isinstance(a, MndArena):
+        raise Panic("arena_alloc() expects an `Arena`, found `%s`" % type_name(a))
+    if not is_int(n):
+        raise Panic("arena_alloc() expects an `int` length, found `%s`" % type_name(n))
+    if a.freed:
+        raise Panic("use of a freed arena")
+    if n < 0:
+        raise Panic("ptr length must not be negative")
+    a.total += n * 16
+    return MndPtr([fill] * n, n, 0, a)
+
+
+def bi_arena_free(args, ip):
+    a = one_arg(args, "arena_free()")
+    if not isinstance(a, MndArena):
+        raise Panic("arena_free() expects an `Arena`, found `%s`" % type_name(a))
+    if a.freed:
+        raise Panic("double free of an arena")
+    a.freed = True
+    return a.total
+
+
+def bi_ptr_len(args, ip):
+    v = one_arg(args, "ptr_len()")
+    if isinstance(v, MndPtr):
+        ptr_alive(v)
+        return v.ln
+    if v is None:
+        raise Panic("null pointer access")
+    raise Panic("expected a `ptr` in `ptr_len`, found `%s`" % type_name(v))
+
+
+def bi_is_null(args, ip):
+    v = one_arg(args, "is_null()")
+    if v is None:
+        return True
+    if isinstance(v, MndPtr):
+        return False
+    raise Panic("expected a `ptr` in `is_null`, found `%s`" % type_name(v))
+
+
 def m_arity(args, n, name):
     if len(args) != n:
         raise Panic("%s() takes exactly %d argument%s but %d were given"
@@ -1047,6 +1156,8 @@ BUILTINS = {
     "split": bi_split, "substr": bi_substr, "read_file": bi_read_file,
     "write_file": bi_write_file, "args": lambda a, ip: list(ip.argv),
     "fatal": bi_fatal, "exit": bi_exit, "range": bi_range,
+    "alloc": bi_alloc, "arena_new": bi_arena_new, "arena_alloc": bi_arena_alloc,
+    "arena_free": bi_arena_free, "ptr_len": bi_ptr_len, "is_null": bi_is_null,
 }
 
 
@@ -1105,6 +1216,8 @@ class Interp:
                     continue
         elif tag == "for":
             self.exec_for(node, env)
+        elif tag == "unsafe":
+            self.exec_block(node[1], Env(env))
         elif tag == "break":
             raise BreakEx()
         elif tag == "continue":
@@ -1164,6 +1277,15 @@ class Interp:
             base.d[raw] = val
             return
         idx = require_index(raw)
+        if isinstance(base, MndPtr):
+            ptr_alive(base)
+            pos = base.off + idx
+            if pos < 0 or pos >= base.ln:
+                panic_index(base.ln, pos)
+            base.slots[pos] = val
+            return
+        if base is None:
+            raise Panic("null pointer access")
         if isinstance(base, str):
             raise Panic("strings are immutable: cannot assign to a string index")
         require_list(base)
@@ -1209,6 +1331,14 @@ class Interp:
                     raise Panic("no key `%s` in dict" % raw)
                 return base.d[raw]
             idx = require_index(raw)
+            if isinstance(base, MndPtr):
+                ptr_alive(base)
+                pos = base.off + idx
+                if pos < 0 or pos >= base.ln:
+                    panic_index(base.ln, pos)
+                return base.slots[pos]
+            if base is None:
+                raise Panic("null pointer access")
             if isinstance(base, str):
                 if idx < 0 or idx >= len(base):
                     panic_index(len(base), idx)
@@ -1330,10 +1460,14 @@ class Interp:
         if op == "+":
             if isinstance(l, str) and isinstance(r, str):
                 return l + r
+            if isinstance(l, MndPtr) and is_int(r):
+                return MndPtr(l.slots, l.ln, l.off + r, l.owner)
             if is_int(l) and is_int(r):
                 return wrap64(l + r)
             raise Panic("cannot apply operator `+` to types `%s` and `%s`"
                         % (type_name(l), type_name(r)))
+        if op == "-" and isinstance(l, MndPtr) and is_int(r):
+            return MndPtr(l.slots, l.ln, l.off - r, l.owner)
         if op in ("-", "*", "/", "%"):
             if not (is_int(l) and is_int(r)):
                 raise Panic("cannot apply operator `%s` to types `%s` and `%s`"

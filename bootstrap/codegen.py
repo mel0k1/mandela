@@ -49,8 +49,10 @@ typedef struct MndStruct MndStruct;
 typedef struct MndStructDef MndStructDef;
 typedef struct MndDict MndDict;
 typedef struct MndValue MndValue;
+typedef struct MndArena MndArena;
+typedef struct MndPtr MndPtr;
 
-typedef enum { MND_NIL = 0, MND_INT, MND_BOOL, MND_STR, MND_LIST, MND_STRUCT, MND_DICT } MndTag;
+typedef enum { MND_NIL = 0, MND_INT, MND_BOOL, MND_STR, MND_LIST, MND_STRUCT, MND_DICT, MND_PTR, MND_ARENA } MndTag;
 
 struct MndValue {
     MndTag tag;
@@ -61,11 +63,28 @@ struct MndValue {
         MndList *l;
         MndStruct *st;
         MndDict *d;
+        MndPtr *pt;
+        MndArena *ar;
     } u;
 };
 
 struct MndStr { int64_t len; char *data; };
 struct MndList { int64_t len; int64_t cap; MndValue *items; };
+
+struct MndArena {
+    int freed;
+    int64_t total;
+    char **chunks;
+    int64_t nchunks;
+    int64_t ccap;
+    char *cur;
+    int64_t left;
+};
+
+struct MndPtr { MndValue *slots; int64_t len; int64_t off; MndArena *owner; };
+
+static MndValue mnd_ptr_off(MndPtr *p, int64_t d);
+static void mnd_ptr_check(MndPtr *p);
 
 typedef MndValue (*MndMethodFn)(MndValue recv, int64_t n, const MndValue *args);
 typedef struct MndMethodEntry { const char *name; MndMethodFn fn; } MndMethodEntry;
@@ -111,6 +130,8 @@ static const char *mnd_type_name(MndValue v) {
     case MND_STR: return "str";
     case MND_LIST: return "list";
     case MND_DICT: return "dict";
+    case MND_PTR: return "ptr";
+    case MND_ARENA: return "arena";
     case MND_STRUCT: return v.u.st->def->name;
     }
     return "?";
@@ -120,6 +141,8 @@ static MndValue mnd_nil_v(void) { MndValue v; v.tag = MND_NIL; v.u.i = 0; return
 static MndValue mnd_int_v(int64_t i) { MndValue v; v.tag = MND_INT; v.u.i = i; return v; }
 static MndValue mnd_bool_v(int b) { MndValue v; v.tag = MND_BOOL; v.u.b = b ? 1 : 0; return v; }
 static MndValue mnd_ptr_v(int tag, void *p) { MndValue v; v.tag = (MndTag)tag; v.u.s = p; return v; }
+static MndValue mnd_ptr_val(MndPtr *p) { MndValue v; v.tag = MND_PTR; v.u.pt = p; return v; }
+static MndValue mnd_arena_v(MndArena *a) { MndValue v; v.tag = MND_ARENA; v.u.ar = a; return v; }
 
 static MndStr *mnd_str_new(const char *data, int64_t len) {
     MndStr *s = mnd_alloc(sizeof(MndStr));
@@ -240,6 +263,12 @@ static void mnd_format_into(MndBuf *b, MndValue v, int nested) {
         mnd_buf_put(b, "}", 1);
         break;
     }
+    case MND_PTR:
+        mnd_buf_cstr(b, "<ptr>");
+        break;
+    case MND_ARENA:
+        mnd_buf_cstr(b, "<arena>");
+        break;
     }
 }
 
@@ -447,6 +476,10 @@ static int mnd_eq(MndValue a, MndValue b) {
             if (!mnd_eq(e->val, mnd_dict_get(b.u.d, e->key))) return 0;
         }
         return 1;
+    case MND_PTR:
+        return a.u.pt->slots == b.u.pt->slots && a.u.pt->off == b.u.pt->off;
+    case MND_ARENA:
+        return a.u.ar == b.u.ar;
     }
     return 0;
 }
@@ -479,11 +512,13 @@ static MndValue mnd_add(MndValue l, MndValue r) {
         if (r.u.s->len > 0) memcpy(s->data + l.u.s->len, r.u.s->data, (size_t)r.u.s->len);
         return mnd_ptr_v(MND_STR, s);
     }
+    if (l.tag == MND_PTR && r.tag == MND_INT) return mnd_ptr_off(l.u.pt, r.u.i);
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("+", l, r);
     return mnd_int_v((int64_t)((uint64_t)l.u.i + (uint64_t)r.u.i));
 }
 
 static MndValue mnd_sub(MndValue l, MndValue r) {
+    if (l.tag == MND_PTR && r.tag == MND_INT) return mnd_ptr_off(l.u.pt, (int64_t)(0 - (uint64_t)r.u.i));
     if (l.tag != MND_INT || r.tag != MND_INT) return mnd_arith_fail("-", l, r);
     return mnd_int_v((int64_t)((uint64_t)l.u.i - (uint64_t)r.u.i));
 }
@@ -672,6 +707,14 @@ static MndValue mnd_index_get(MndValue base, MndValue key) {
         return mnd_dict_get(base.u.d, key);
     }
     int64_t i = mnd_require_index(key);
+    if (base.tag == MND_PTR) {
+        MndPtr *p = base.u.pt;
+        mnd_ptr_check(p);
+        int64_t pos = p->off + i;
+        if (pos < 0 || pos >= p->len) mnd_panic_index(p->len, pos);
+        return p->slots[pos];
+    }
+    if (base.tag == MND_NIL) mnd_panic("null pointer access");
     if (base.tag == MND_STR) {
         if (i < 0 || i >= base.u.s->len) mnd_panic_index(base.u.s->len, i);
         return mnd_str_char(base.u.s, i);
@@ -698,6 +741,14 @@ static void mnd_index_set(MndValue base, MndValue key, MndValue val) {
         return;
     }
     int64_t i = mnd_require_index(key);
+    if (base.tag == MND_PTR) {
+        MndPtr *p = base.u.pt;
+        mnd_ptr_check(p);
+        int64_t pos = p->off + i;
+        if (pos < 0 || pos >= p->len) mnd_panic_index(p->len, pos);
+        p->slots[pos] = val;
+        return;
+    }
     if (base.tag == MND_STR)
         mnd_panic("strings are immutable: cannot assign to a string index");
     if (base.tag == MND_LIST) {
@@ -989,6 +1040,146 @@ static void mnd_panic_arity(const char *name, int64_t want, int64_t got) {
     snprintf(msg, sizeof(msg), "method `%s` takes %lld argument(s) but %lld were given",
              name, (long long)want, (long long)got);
     mnd_panic(msg);
+}
+
+/* ---- pointers and arenas ----------------------------------------------- */
+
+static MndArena mnd_g_arena;
+
+static void mnd_ptr_check(MndPtr *p) {
+    if (p->owner != NULL && p->owner->freed) mnd_panic("use after arena_free");
+}
+
+static void *mnd_arena_alloc(MndArena *ar, size_t n) {
+    n = (n + 15) & ~(size_t)15;
+    if (n == 0) n = 16;
+    if (ar->left < (int64_t)n) {
+        size_t csz = (size_t)1 << 20;
+        if (n > csz) csz = n;
+        char *chunk = mnd_alloc(csz);
+        if (ar->nchunks == ar->ccap) {
+            ar->ccap = ar->ccap ? ar->ccap * 2 : 8;
+            char **nc = mnd_alloc(sizeof(char *) * (size_t)ar->ccap);
+            if (ar->nchunks > 0)
+                memcpy(nc, ar->chunks, sizeof(char *) * (size_t)ar->nchunks);
+            ar->chunks = nc;
+        }
+        ar->chunks[ar->nchunks++] = chunk;
+        ar->cur = chunk;
+        ar->left = (int64_t)csz;
+    }
+    void *p = ar->cur;
+    ar->cur += n;
+    ar->left -= (int64_t)n;
+    return p;
+}
+
+static MndValue mnd_ptr_new(MndArena *ar, int64_t n, MndValue fill) {
+    MndValue *slots = (MndValue *)mnd_arena_alloc(
+        ar, sizeof(MndValue) * (size_t)(n > 0 ? n : 1));
+    for (int64_t i = 0; i < n; i++) slots[i] = fill;
+    MndPtr *p = mnd_alloc(sizeof(MndPtr));
+    p->slots = slots;
+    p->len = n;
+    p->off = 0;
+    p->owner = ar == &mnd_g_arena ? NULL : ar;
+    return mnd_ptr_val(p);
+}
+
+static MndValue mnd_ptr_off(MndPtr *p, int64_t d) {
+    MndPtr *q = mnd_alloc(sizeof(MndPtr));
+    q->slots = p->slots;
+    q->len = p->len;
+    q->off = p->off + d;
+    q->owner = p->owner;
+    return mnd_ptr_val(q);
+}
+
+static int64_t mnd_len_arg(MndValue v, const char *fn) {
+    if (v.tag != MND_INT) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s expects an `int` length, found `%s`",
+                 fn, mnd_type_name(v));
+        mnd_panic(msg);
+    }
+    return v.u.i;
+}
+
+static MndArena *mnd_arena_arg(MndValue v, const char *fn) {
+    if (v.tag != MND_ARENA) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "%s expects an `Arena`, found `%s`",
+                 fn, mnd_type_name(v));
+        mnd_panic(msg);
+    }
+    return v.u.ar;
+}
+
+static MndPtr *mnd_ptr_arg(MndValue v, const char *fn) {
+    if (v.tag == MND_NIL) mnd_panic("null pointer access");
+    if (v.tag != MND_PTR) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "expected a `ptr` in `%s`, found `%s`",
+                 fn, mnd_type_name(v));
+        mnd_panic(msg);
+    }
+    return v.u.pt;
+}
+
+static MndValue mnd_bi_alloc(MndValue n, MndValue fill) {
+    int64_t k = mnd_len_arg(n, "alloc()");
+    if (k < 0) mnd_panic("ptr length must not be negative");
+    return mnd_ptr_new(&mnd_g_arena, k, fill);
+}
+
+static MndValue mnd_bi_arena_new(void) {
+    MndArena *a = mnd_alloc(sizeof(MndArena));
+    a->freed = 0;
+    a->total = 0;
+    a->chunks = NULL;
+    a->nchunks = 0;
+    a->ccap = 0;
+    a->cur = NULL;
+    a->left = 0;
+    return mnd_arena_v(a);
+}
+
+static MndValue mnd_bi_arena_alloc(MndValue a, MndValue n, MndValue fill) {
+    MndArena *ar = mnd_arena_arg(a, "arena_alloc()");
+    int64_t k = mnd_len_arg(n, "arena_alloc()");
+    if (ar->freed) mnd_panic("use of a freed arena");
+    if (k < 0) mnd_panic("ptr length must not be negative");
+    ar->total += k * 16;
+    return mnd_ptr_new(ar, k, fill);
+}
+
+static MndValue mnd_bi_arena_free(MndValue a) {
+    MndArena *ar = mnd_arena_arg(a, "arena_free()");
+    if (ar->freed) mnd_panic("double free of an arena");
+    ar->freed = 1;
+    for (int64_t i = 0; i < ar->nchunks; i++) free(ar->chunks[i]);
+    ar->nchunks = 0;
+    ar->chunks = NULL;
+    ar->cur = NULL;
+    ar->left = 0;
+    return mnd_int_v(ar->total);
+}
+
+static MndValue mnd_bi_ptr_len(MndValue v) {
+    MndPtr *p = mnd_ptr_arg(v, "ptr_len");
+    mnd_ptr_check(p);
+    return mnd_int_v(p->len);
+}
+
+static MndValue mnd_bi_is_null(MndValue v) {
+    if (v.tag == MND_NIL) return mnd_bool_v(1);
+    if (v.tag != MND_PTR) {
+        char msg[192];
+        snprintf(msg, sizeof(msg), "expected a `ptr` in `is_null`, found `%s`",
+                 mnd_type_name(v));
+        mnd_panic(msg);
+    }
+    return mnd_bool_v(0);
 }
 
 /* ---- builtins ---------------------------------------------------------- */
@@ -1350,6 +1541,13 @@ class CodeGen:
             out.append("}")
         elif tag == "for":
             self.gen_for(node, out)
+        elif tag == "unsafe":
+            out.append("{")
+            self.push_scope()
+            for s in node[1]:
+                self.stmt(s, out)
+            self.pop_scope()
+            out.append("}")
         elif tag == "break":
             out.append("break;")
         elif tag == "continue":
@@ -1557,6 +1755,9 @@ class CodeGen:
             "read_file": "mnd_bi_read_file", "write_file": "mnd_bi_write_file",
             "args": "mnd_bi_args", "fatal": "mnd_bi_fatal", "exit": "mnd_bi_exit",
             "range": "mnd_range_err",
+            "alloc": "mnd_bi_alloc", "arena_new": "mnd_bi_arena_new",
+            "arena_alloc": "mnd_bi_arena_alloc", "arena_free": "mnd_bi_arena_free",
+            "ptr_len": "mnd_bi_ptr_len", "is_null": "mnd_bi_is_null",
         }
         if name in builtins:
             return self.calln(builtins[name], es)

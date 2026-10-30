@@ -1,0 +1,4 @@
+def main():
+    let p = alloc(4, nil)
+    print(ptr_len(p))
+main()

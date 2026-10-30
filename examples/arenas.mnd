@@ -1,0 +1,60 @@
+# A dynamic int vector built directly on raw pointer slots + an arena.
+#
+#   mandela run examples/arenas.mnd
+#   mandela build examples/arenas.mnd && ./arenas
+#
+# The vector owns a pointer into an arena and grows by doubling. When the
+# arena is freed, every buffer the vector ever allocated dies with it —
+# no per-object frees, no leaks escaping the region.
+
+struct Vec:
+    data: ptr[int]
+    len: int
+    cap: int
+
+    def len_of(self) -> int:
+        return self.len
+
+    def get(self, i: int) -> int:
+        unsafe:
+            return self.data[i]
+
+    def sum(self) -> int:
+        let mut acc = 0
+        unsafe:
+            for i in range(0, self.len):
+                acc = acc + self.data[i]
+        return acc
+
+    def grow(mut self, a: Arena):
+        let fresh: ptr[int] = arena_alloc(a, self.cap * 2, 0)
+        unsafe:
+            for i in range(0, self.len):
+                fresh[i] = self.data[i]
+        self.data = fresh
+        self.cap = self.cap * 2
+
+    def push(mut self, a: Arena, v: int):
+        if self.len == self.cap:
+            self.grow(a)
+        unsafe:
+            self.data[self.len] = v
+        self.len = self.len + 1
+
+def make_vec() -> Vec:
+    return Vec { data: alloc(4, 0), len: 0, cap: 4 }
+
+def main():
+    let a = arena_new()
+    let mut v = make_vec()
+    for i in range(1, 21):
+        v.push(a, i * i)
+    print(v.len_of())          # 20
+    print(v.cap)               # 32: 4 -> 8 -> 16 -> 32 doublings
+    print(v.get(0))            # 1
+    print(v.get(19))           # 400
+    print(v.sum())             # 2870
+    unsafe:
+        print(arena_free(a))   # bytes the vector consumed
+
+main()

@@ -11,8 +11,8 @@
 [English](README_EN.md) | Русский
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.3%20native%20codegen-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.4%20pointers%20%26%20arenas-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -118,6 +118,40 @@ print("mandela".replace("a", "4"))# m4ndel4
 `split`, `contains`, `starts_with`, `ends_with`, `replace`, `find`, `substr`,
 `repeat`, `chars`.
 
+## Указатели и арены
+
+Сборщика мусора нет: большие буферы выделяются явно из арен и освобождаются
+целым регионом. Все операции с памятью проверяются в рантайме — неопределённого
+поведения нет, ошибка всегда даёт честную панику:
+
+```mandela
+# examples/arenas.mnd
+struct Vec:
+    data: ptr[int]
+    len: int
+    cap: int
+
+    def push(mut self, a: Arena, v: int):
+        if self.len == self.cap:
+            self.grow(a)              # удвоение в той же арене
+        unsafe:
+            self.data[self.len] = v
+        self.len = self.len + 1
+
+def main():
+    let a = arena_new()
+    let mut v = Vec { data: alloc(4, 0), len: 0, cap: 4 }
+    for i in range(1, 21):
+        v.push(a, i * i)
+    unsafe:
+        print(arena_free(a))          # 896: вся память региона разом
+```
+
+Чтение и запись через указатель, как и `arena_free`, разрешены только внутри
+`unsafe`-блока (`E0133`). Выход за границы, обращение через `nil`, использование
+после `arena_free` и повторное освобождение — детерминированные паники с кодом
+выхода 101, в интерпретаторе и в нативном бинаре одинаково.
+
 ## Компилятор не пропустит
 
 `./bin/mandela check` ловит ошибки до запуска и показывает каждую с номером,
@@ -207,10 +241,10 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 ./bin/mandela ast file.mnd              # дамп AST в s-выражениях (отладка)
 ```
 
-## Возможности v0.3
+## Возможности v0.4
 
 - Статическая типизация с выводом типов: `let x = 5`, `list[int]`,
-  `dict[str, int]`
+  `dict[str, int]`, `ptr[int]`, `ptr[Node]`
 - Неизменяемость по умолчанию: `let` против `let mut`, `mut self` для методов
 - Целые 64-битные числа (усечённое деление, переполнение по модулю 2^64),
   строки, `bool`, `nil`, списки, словари с сохранением порядка вставки
@@ -218,11 +252,14 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
   replace find substr repeat chars`
 - Методы словарей: `keys values has remove`
 - Структуры с полями и методами, `self`, дисциплина `mut self`
+- Память: арены (`arena_new`, `arena_alloc`, `arena_free`), указатели `ptr[T]`
+  с fill-инициализацией, `unsafe`-блоки, детерминированные паники вместо UB
 - `if/elif/else`, `while`, `for x in range(...)/список/строка/словарь`,
   `break`, `continue`
 - Функции с обязательными аннотациями параметров, рекурсия, хоистинг функций
 - Встроенные: `print len str int chr ord push pop split substr read_file
-  write_file args fatal exit range`
+  write_file args fatal exit range alloc arena_new arena_alloc arena_free
+  ptr_len is_null`
 - Кодогенерация: нативные бинари через системный тулчейн, `--emit c|asm|bin`
 - Строгий тайп-чекер с диагностиками `E0xxx`, предупреждения о неиспользуемых
   переменных
@@ -231,19 +268,21 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 
 | Версия | Что планируется |
 | --- | --- |
-| v0.4 | Собственный аллокатор и арены, `ptr<T>`, `unsafe`-блоки |
 | v0.5 | Числа с плавающей точкой |
 | v0.6 | Прямой бэкенд в машинный код (x86-64/ARM64) без промежуточного представления |
 | v0.7 | Модули вместо линейных скриптов, менеджер пакетов |
+| v0.8 | Самосборка: компилятор Mandela генерирует машинный код для самого себя |
 
 ## Разработка
 
 ```bash
-make test        # 50 тестов: позитивные, негативные и паритет нативной сборки
+make test        # 70 тестов: позитивные, негативные, паники и паритет нативной сборки
 ```
 
 Каждый позитивный тест прогоняется дважды: интерпретатором и в скомпилированном
-виде — вывод обязан совпасть байт-в-байт.
+виде — вывод обязан совпасть байт-в-байт. Тесты паник проверяют, что
+интерпретатор и нативный бинарь роняют программу с одним и тем же сообщением
+и кодом выхода 101.
 
 Структура репозитория:
 
@@ -252,9 +291,9 @@ bin/mandela          CLI
 bootstrap/mandela.py бутстрап-движок (интерпретатор)
 bootstrap/codegen.py бэкенд кодогенерации
 src/*.mnd            компилятор, написанный на Mandela
-spec/SPEC.md         спецификация языка v0.3
+spec/SPEC.md         спецификация языка v0.4
 examples/            примеры программ
-tests/               тесты (позитивные, негативные, нативные)
+tests/               тесты (позитивные, негативные, паники, нативные)
 ```
 
 ## Лицензия

@@ -36,6 +36,46 @@ for f in "$ROOT"/tests/neg/*.mnd; do
     fi
 done
 
+# panic tests: valid programs that trap at runtime; both the interpreter and
+# the native binary must exit 101 with the same deterministic message
+for f in "$ROOT"/tests/panic/*.mnd; do
+    [ -e "$f" ] || continue
+    exp="$f.err"
+    check_panic() {
+        out="$1"
+        rc="$2"
+        [ "$rc" -eq 101 ] && printf '%s' "$out" | grep -qF "$(cat "$exp")"
+    }
+    out="$("$ROOT/bin/mandela" run "$f" 2>&1)"
+    if check_panic "$out" "$?"; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "FAIL panic (interpreter): $f"
+        echo "--- expected to contain ---"
+        cat "$exp"
+        echo "--- got (rc shown above) ---"
+        printf '%s\n' "$out"
+    fi
+    if command -v "${CC:-cc}" >/dev/null 2>&1; then
+        bin="$(mktemp /tmp/mandela_panic.XXXXXX)"
+        if "$ROOT/bin/mandela" build "$f" -o "$bin" >/dev/null 2>&1; then
+            out="$("$bin" 2>&1)"
+            if check_panic "$out" "$?"; then
+                pass=$((pass + 1))
+            else
+                fail=$((fail + 1))
+                echo "FAIL panic (native): $f"
+                printf '%s\n' "$out"
+            fi
+        else
+            fail=$((fail + 1))
+            echo "FAIL panic (native build): $f"
+        fi
+        rm -f "$bin"
+    fi
+done
+
 # native codegen: every positive test must produce identical output when
 # compiled to a native executable via `mandela build`
 CC_BIN="${CC:-cc}"

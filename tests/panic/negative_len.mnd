@@ -1,0 +1,3 @@
+def main():
+    let p: ptr[int] = alloc(0 - 1, 0)
+main()

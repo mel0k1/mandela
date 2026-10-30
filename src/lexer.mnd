@@ -1,7 +1,7 @@
 def lx_keywords() -> list[str]:
     return ["def", "return", "if", "elif", "else", "while", "for", "in", "let",
             "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
-            "struct"]
+            "struct", "unsafe"]
 
 def lx_is_kw(w: str) -> bool:
     for k in lx_keywords():

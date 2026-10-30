@@ -1,0 +1,5 @@
+def main():
+    let p: ptr[int] = alloc(4, 0)
+    let q: ptr[int] = p + "x"
+    print(ptr_len(q))
+main()

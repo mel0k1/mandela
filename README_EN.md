@@ -11,8 +11,8 @@ The Mandela compiler is written in Mandela itself.
 English | [Русский](README.md)
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.3%20native%20codegen-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-50%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.4%20pointers%20%26%20arenas-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-70%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -118,6 +118,41 @@ Dictionaries keep insertion order; keys are `str` or `int`. Dictionary methods:
 `split`, `contains`, `starts_with`, `ends_with`, `replace`, `find`, `substr`,
 `repeat`, `chars`.
 
+## Pointers and arenas
+
+There is no garbage collector: bulk buffers are allocated explicitly from
+arenas and released as whole regions. Every memory operation is checked at
+runtime — there is no undefined behavior; a broken program fails with an
+honest, deterministic panic:
+
+```mandela
+# examples/arenas.mnd
+struct Vec:
+    data: ptr[int]
+    len: int
+    cap: int
+
+    def push(mut self, a: Arena, v: int):
+        if self.len == self.cap:
+            self.grow(a)              # doubling inside the same arena
+        unsafe:
+            self.data[self.len] = v
+        self.len = self.len + 1
+
+def main():
+    let a = arena_new()
+    let mut v = Vec { data: alloc(4, 0), len: 0, cap: 4 }
+    for i in range(1, 21):
+        v.push(a, i * i)
+    unsafe:
+        print(arena_free(a))          # 896: the whole region at once
+```
+
+Reading and writing through a pointer, as well as `arena_free`, are only
+allowed inside an `unsafe` block (`E0133`). Out-of-bounds access, use of `nil`,
+use after `arena_free` and double free are deterministic panics with exit code
+101 — identical in the interpreter and in the native binary.
+
 ## The compiler catches it
 
 `./bin/mandela check` reports mistakes before the program runs, each with a
@@ -206,9 +241,10 @@ generates machine code on its own (see the roadmap).
 ./bin/mandela ast file.mnd              # AST dump as s-expressions (debug)
 ```
 
-## v0.3 features
+## v0.4 features
 
-- Static typing with inference: `let x = 5`, `list[int]`, `dict[str, int]`
+- Static typing with inference: `let x = 5`, `list[int]`, `dict[str, int]`,
+  `ptr[int]`, `ptr[Node]`
 - Immutability by default: `let` vs `let mut`, `mut self` for methods
 - 64-bit integers (truncating division, two's-complement wrap-around),
   strings, `bool`, `nil`, lists, insertion-ordered dictionaries
@@ -216,11 +252,14 @@ generates machine code on its own (see the roadmap).
   replace find substr repeat chars`
 - Dictionary methods: `keys values has remove`
 - Structs with fields and methods, `self`, `mut self` discipline
+- Memory: arenas (`arena_new`, `arena_alloc`, `arena_free`), `ptr[T]` pointers
+  with fill initialization, `unsafe` blocks, deterministic panics instead of UB
 - `if/elif/else`, `while`, `for x in range(...)/list/string/dict`,
   `break`, `continue`
 - Functions with mandatory parameter annotations, recursion, function hoisting
 - Built-ins: `print len str int chr ord push pop split substr read_file
-  write_file args fatal exit range`
+  write_file args fatal exit range alloc arena_new arena_alloc arena_free
+  ptr_len is_null`
 - Code generation: native binaries via the system toolchain, `--emit c|asm|bin`
 - Strict type checker with `E0xxx` diagnostics, unused-variable warnings
 
@@ -228,19 +267,20 @@ generates machine code on its own (see the roadmap).
 
 | Version | Plan |
 | --- | --- |
-| v0.4 | Own allocator and arenas, `ptr<T>`, `unsafe` blocks |
 | v0.5 | Floating point |
 | v0.6 | Direct machine-code backend (x86-64/ARM64) without an intermediate representation |
 | v0.7 | Modules instead of linear scripts, package manager |
+| v0.8 | Self-compilation: the Mandela compiler emits machine code for itself |
 
 ## Development
 
 ```bash
-make test        # 50 tests: positive, negative and native-build parity
+make test        # 70 tests: positive, negative, panic and native-build parity
 ```
 
 Every positive test runs twice: on the interpreter and compiled — the output
-must match byte for byte.
+must match byte for byte. Panic tests verify the interpreter and the native
+binary abort with the same message and exit code 101.
 
 Repository layout:
 
@@ -249,9 +289,9 @@ bin/mandela          CLI
 bootstrap/mandela.py bootstrap engine (interpreter)
 bootstrap/codegen.py code generation backend
 src/*.mnd            the compiler, written in Mandela
-spec/SPEC.md         language specification v0.3
+spec/SPEC.md         language specification v0.4
 examples/            example programs
-tests/               positive, negative and native tests
+tests/               positive, negative, panic and native tests
 ```
 
 ## License

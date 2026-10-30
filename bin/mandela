@@ -7,7 +7,7 @@ CODEGEN="$ROOT/bootstrap/codegen.py"
 SRCS=("$ROOT/src/err.mnd" "$ROOT/src/lexer.mnd" "$ROOT/src/parser.mnd" "$ROOT/src/checker.mnd" "$ROOT/src/main.mnd")
 
 usage() {
-    echo "Mandela v0.3"
+    echo "Mandela v0.4"
     echo "usage: mandela <run|check|build|lex|ast> <file.mnd> [args...]"
     echo "       mandela build <file.mnd> [-o out] [--emit c|asm|bin]"
 }

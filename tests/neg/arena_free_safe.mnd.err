@@ -1,0 +1,1 @@
+error[E0133]: call to `arena_free` is unsafe and requires an `unsafe` block

@@ -1,0 +1,92 @@
+# pointers: allocation, fill, indexing, views, equality, printing
+struct Node:
+    val: int
+    next: ptr[Node]
+
+def sum_range(p: ptr[int], n: int) -> int:
+    let mut acc = 0
+    unsafe:
+        for i in range(0, n):
+            acc = acc + p[i]
+    return acc
+
+def make_chain(n: int) -> ptr[Node]:
+    let head: ptr[Node] = alloc(1, nil)
+    unsafe:
+        head[0] = Node { val: 0, next: nil }
+        let mut tail = head
+        for i in range(1, n):
+            let node: ptr[Node] = alloc(1, nil)
+            node[0] = Node { val: i * i, next: nil }
+            tail[0].next = node
+            tail = node
+    return head
+
+def chain_sum(head: ptr[Node]) -> int:
+    let mut acc = 0
+    unsafe:
+        let mut cur = head
+        while not is_null(cur):
+            acc = acc + cur[0].val
+            cur = cur[0].next
+    return acc
+
+def main():
+    let zeros: ptr[int] = alloc(4, 0)
+    unsafe:
+        print(zeros[0])
+        print(zeros[3])
+        zeros[0] = 10
+        zeros[1] = 20
+        zeros[2] = zeros[0] + zeros[1]
+        zeros[3] = sum_range(zeros, 3)
+        print(zeros[2])
+        print(zeros[3])
+    print(ptr_len(zeros))
+
+    let words: ptr[str] = alloc(2, "?")
+    unsafe:
+        print(words[0])
+        words[0] = "mandela"
+        words[1] = words[0].upper()
+        print(words[0])
+        print(words[1])
+
+    let grid: ptr[ptr[int]] = alloc(2, nil)
+    unsafe:
+        grid[0] = alloc(3, 7)
+        grid[1] = alloc(3, 9)
+        print(grid[0][2])
+        print(grid[1][0])
+        grid[1][2] = grid[0][0] + 1
+        print(grid[1][2])
+
+    let base: ptr[int] = alloc(5, 1)
+    unsafe:
+        let view = base + 2
+        print(view[0])
+        view[1] = 100
+        print(base[3])
+        print(ptr_len(view))
+        let back = view - 1
+        print(back[0])
+
+    unsafe:
+        print(base == base)
+        print(base == base + 1)
+        print(base == nil)
+        print(is_null(base))
+        print(is_nil_check())
+    print(sum_range(base, 5))
+
+    let chain = make_chain(4)
+    print(chain_sum(chain))
+    unsafe:
+        print(chain[0].val)
+        print(chain[0].next[0].val)
+
+def is_nil_check() -> bool:
+    let p: ptr[int] = nil
+    return is_null(p)
+
+main()

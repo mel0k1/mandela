@@ -1,4 +1,4 @@
-# The Mandela Language Specification — v0.3.0
+# The Mandela Language Specification — v0.4.0
 
 Status: draft, implemented by the self-hosted compiler in `src/` and the code
 generator in `bootstrap/codegen.py`.
@@ -27,7 +27,7 @@ Identifiers match `[A-Za-z_][A-Za-z0-9_]*`. The reserved words are:
 
 ```text
 def  return  if  elif  else  while  for  in  let  mut  struct
-true  false  nil  and  or  not  break  continue
+true  false  nil  and  or  not  break  continue  unsafe
 ```
 
 ### 1.4 Operators and punctuation
@@ -52,6 +52,8 @@ true  false  nil  and  or  not  break  continue
 | `nil` | The unit-ish value `nil`, returned by functions without `->`. |
 | `list[T]` | Growable array of `T`. Empty literals require an annotation: `let a: list[int] = []`. |
 | `dict[K, V]` | Insertion-ordered map from `K` keys to `V` values; see §6. |
+| `ptr[T]` | Raw pointer to `T` slots; see §8. `nil` is the null pointer. |
+| `Arena` | A memory region; pointers are allocated from it and released together; see §8. |
 | `struct` | Nominal record type defined in source; see §5. |
 
 There is no implicit conversion between any two types.
@@ -183,7 +185,81 @@ Wrong argument types are `E0308`, wrong arity is `E0061`. The standalone
 `split(s, sep)` and `substr(s, start, len)` built-ins remain and behave
 identically.
 
-## 8. Statements
+## 8. Pointers, arenas and `unsafe`
+
+Mandela has no garbage collector. Bulk memory is managed explicitly with
+region-based allocation: pointers are carved out of arenas and released
+together with the arena they came from. All pointer operations are checked at
+runtime — there is no undefined behaviour in v0.4.
+
+### 8.1 Allocation
+
+| Function | Signature | Notes |
+| --- | --- | --- |
+| `alloc(n, fill)` | int, T -> ptr[T] | `n` slots from the process-wide arena, each initialized with a copy of `fill`. The element type is inferred from `fill`. |
+| `arena_new()` | -> Arena | Creates a fresh arena. |
+| `arena_alloc(a, n, fill)` | Arena, int, T -> ptr[T] | Like `alloc`, but the slots live in `a`. |
+| `arena_free(a)` | Arena -> int | [unsafe] Releases every allocation made in `a` and returns the number of slot bytes it had accounted (`16` per slot). |
+| `ptr_len(p)` | ptr[T] -> int | Number of slots of the underlying allocation. |
+| `is_null(p)` | ptr[T] -> bool | `true` for the null pointer. |
+
+`nil` is the null pointer: it converts to any `ptr[T]` and compares equal to
+itself. A negative length panics; `alloc(4, nil)` needs the target type to be
+known (`E0282` otherwise).
+
+### 8.2 Operations
+
+```text
+let p: ptr[int] = alloc(4, 0)   # four zero slots
+p[2] = 41                       # store (unsafe)
+print(p[2] + 1)                 # load (unsafe)
+let q = p + 2                   # view two slots forward; `q[0]` is `p[2]`
+let r = q - 1                   # views share the allocation
+```
+
+- Indexing a pointer reads/writes the slot at `view.offset + index`; the
+  bounds check reports the absolute slot: for a 2-slot pointer,
+  `p[3]` panics with `index out of bounds: the len is 2 but the index is 3`.
+- `p + i` and `p - i` shift the view by `i` slots without checking bounds;
+  only dereferencing checks. Views are values: they compare equal when they
+  share the allocation and the offset (`p == p + 0`).
+- `print` formats a pointer as `<ptr>` and an arena as `<arena>`; addresses
+  are never shown, so output is reproducible.
+- Pointers nest (`ptr[ptr[int]]`) and compose with lists, dicts and structs
+  (`list[ptr[Node]]`, a `next: ptr[Node]` field for linked structures).
+
+### 8.3 `unsafe`
+
+Operations that read or write memory manually must sit inside an `unsafe`
+block:
+
+```text
+unsafe:
+    p[0] = 1
+    print(p[0])
+    print(arena_free(a))
+```
+
+An unsafe operation outside the block is `E0133`: indexing a pointer (read or
+write) and calling `arena_free` require `unsafe`. Creating pointers, pointer
+arithmetic, `ptr_len` and `is_null` are safe. `unsafe` is a normal block: it
+introduces a scope and may nest.
+
+`unsafe` means manual memory management, not unchecked memory: even inside an
+`unsafe` block every access is bounds-checked, null-checked and checked
+against its arena. Mandela has no undefined behaviour — a broken program
+panics deterministically instead:
+
+| Panic | Cause |
+| --- | --- |
+| `panic: null pointer access` | Indexing or measuring `nil`. |
+| `panic: index out of bounds: the len is L but the index is I` | Slot access outside the allocation. |
+| `panic: use after arena_free` | Access through a pointer whose arena was freed. |
+| `panic: double free of an arena` | `arena_free` on the same arena twice. |
+| `panic: use of a freed arena` | `arena_alloc` after `arena_free`. |
+| `panic: ptr length must not be negative` | Negative `alloc`/`arena_alloc` length. |
+
+## 9. Statements
 
 ```text
 if cond:
@@ -208,7 +284,7 @@ for k in dict_value:     # keys in insertion order
 - `return` at top level is `E0572`.
 - Single-line suites are allowed: `if x == 1: print("one")`.
 
-## 9. Expressions
+## 10. Expressions
 
 Precedence, from lowest to highest:
 
@@ -227,6 +303,8 @@ Precedence, from lowest to highest:
 Semantics:
 
 - `+` adds integers or concatenates strings; mixing is `E0369`.
+- `ptr[T] + int` and `ptr[T] - int` shift the view by that many slots (§8);
+  any other pointer arithmetic combination is `E0369`.
 - `/` and `%` truncate toward zero and panic on a zero divisor.
 - `==`/`!=` require the same type on both sides (`E0308`); lists, dicts and
   structs are compared by contents.
@@ -238,7 +316,7 @@ Semantics:
 - Trailing commas are allowed in call arguments, list literals, dict literals
   and struct literals.
 
-## 10. Built-ins
+## 11. Built-ins
 
 | Function | Signature | Notes |
 | --- | --- | --- |
@@ -258,6 +336,12 @@ Semantics:
 | `fatal(msg)` | str -> never | Prints `msg` to stderr, exit code 1. |
 | `exit(code)` | int -> never | Terminates with `code`. |
 | `range(...)` | int -> iterable | Only in `for`. |
+| `alloc(n, fill)` | int, T -> ptr[T] | See §8. |
+| `arena_new()` | -> Arena | See §8. |
+| `arena_alloc(a, n, fill)` | Arena, int, T -> ptr[T] | See §8. |
+| `arena_free(a)` | Arena -> int | [unsafe] See §8. |
+| `ptr_len(p)` | ptr[T] -> int | See §8. |
+| `is_null(p)` | ptr[T] -> bool | See §8. |
 
 `print` / `str` format values as:
 
@@ -267,9 +351,11 @@ Semantics:
 [1, 2, 3]
 {"a": 1, "b": 2}
 Point { x: 1, y: 2 }
+<ptr>
+<arena>
 ```
 
-## 11. Panics
+## 12. Panics
 
 Runtime contract violations abort the process with exit code `101` and a
 message on stderr:
@@ -282,7 +368,7 @@ panic: no key `x` in dict
 panic: method `bump` takes 1 argument(s) but 2 were given
 ```
 
-## 12. The strict compiler
+## 13. The strict compiler
 
 `mandela check` performs full static checking and reports every error in one
 pass — error code, file, line, column and a caret under the offending token —
@@ -295,10 +381,11 @@ functions that never return) do not fail the build.
 | E0062 | Struct field specified more than once in a literal |
 | E0063 | Missing field(s) in a struct initializer |
 | E0124 | Struct field declared more than once |
+| E0133 | Unsafe operation (pointer indexing, `arena_free`) outside an `unsafe` block |
 | E0267 | `continue` outside of a loop |
 | E0268 | `break` outside of a loop |
 | E0277 | Type is not an iterator / not indexable |
-| E0282 | Type annotations needed (empty list or dict literal) |
+| E0282 | Type annotations needed (empty list or dict literal, ambiguous `alloc` fill) |
 | E0308 | Mismatched types |
 | E0369 | Operator not applicable to these types |
 | E0384 | Assignment to immutable variable (including `v.f` and `self.f`) |
@@ -325,7 +412,7 @@ error: expected `(`, found identifier `x`
   |         ^
 ```
 
-## 13. The toolchain and code generation
+## 14. The toolchain and code generation
 
 `mandela build program.mnd` produces a native executable:
 
@@ -344,6 +431,10 @@ writes the assembly listing, `--emit bin` (default) writes the executable.
 `mandela run` executes programs on the bootstrap interpreter after the same
 check; the two backends are kept output-identical by the test suite.
 
-Memory model in v0.3: allocations live for the duration of the process; there
-is no garbage collector yet. A dedicated allocator is planned before the
-bootstrap engine is retired.
+Memory model in v0.4: runtime objects (strings, lists, dicts, structs) are
+allocated from a process-wide arena and live for the duration of the process.
+Bulk buffers are explicit: `alloc`/`arena_alloc` hand out pointer views over
+arena slots, and `arena_free` releases a whole region at once. Individual
+objects cannot be freed one by one; there is no garbage collector.
+`bootstrap/mandela.py` (the bootstrap engine) remains only as a temporary
+host until the toolchain compiles itself.

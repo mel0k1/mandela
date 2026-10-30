@@ -1,0 +1,7 @@
+def main():
+    let a = arena_new()
+    let p: ptr[int] = arena_alloc(a, 2, 0)
+    unsafe:
+        print(arena_free(a))
+        print(p[0])
+main()

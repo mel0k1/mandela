@@ -1,0 +1,4 @@
+def main():
+    let p: ptr[int] = alloc(4, 0)
+    print(p[0])
+main()

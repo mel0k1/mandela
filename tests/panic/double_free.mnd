@@ -1,0 +1,6 @@
+def main():
+    let a = arena_new()
+    unsafe:
+        print(arena_free(a))
+        print(arena_free(a))
+main()
