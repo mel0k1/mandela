@@ -1,0 +1,31 @@
+# Словари: ключи str или int, значения любых типов.
+let mut stock: dict[str, int] = {"apples": 3, "bananas": 5}
+print(stock)
+
+# Чтение, запись, размер
+print(stock["apples"])
+stock["cherries"] = 7
+print(len(stock))
+
+# Методы: keys, values, has, remove
+print(stock.keys())
+print(stock.values())
+print(stock.has("pears"))
+print(stock.remove("bananas"))
+
+# Итерация по ключам (в порядке вставки)
+for k in stock:
+    print(k + " = " + str(stock[k]))
+
+# Подсчёт частот слов — классика
+let text = "to be or not to be"
+let mut freq: dict[str, int] = {}
+for w in text.split(" "):
+    if freq.has(w):
+        freq[w] = freq[w] + 1
+    else:
+        freq[w] = 1
+print(freq)
+
+# Сравнение по значению
+print({"a": 1} == {"a": 1})
