@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HOST="$ROOT/bootstrap/mandela.py"
+SRCS=("$ROOT/src/err.mnd" "$ROOT/src/lexer.mnd" "$ROOT/src/parser.mnd" "$ROOT/src/checker.mnd" "$ROOT/src/main.mnd")
+
+usage() {
+    echo "Mandela v0.1"
+    echo "usage: mandela <run|check|lex|ast> <file.mnd> [args...]"
+}
+
+cmd="${1:-}"
+if [ -z "$cmd" ]; then
+    usage
+    exit 1
+fi
+shift
+
+case "$cmd" in
+    check|lex|ast)
+        f="${1:-}"
+        if [ -z "$f" ]; then usage; exit 1; fi
+        exec python3 "$HOST" "${SRCS[@]}" -- "$cmd" "$f"
+        ;;
+    run)
+        f="${1:-}"
+        if [ -z "$f" ]; then usage; exit 1; fi
+        shift
+        python3 "$HOST" "${SRCS[@]}" -- check "$f"
+        exec python3 "$HOST" "$f" -- "$@"
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac

@@ -1,0 +1,123 @@
+let mut src_path = ""
+let mut src_lines = []
+
+def dbg_pad(s: str, w: int) -> str:
+    let mut out = s
+    while len(out) < w:
+        out = out + " "
+    return out
+
+def dbg_tokens(toks: list[str]):
+    for t in toks:
+        print(dbg_pad(str(t[2]), 5) + dbg_pad(t[0], 8) + str(t[1]))
+
+def dbg_block(stmts: list[str]) -> str:
+    let mut s = "(block"
+    for st in stmts:
+        s = s + " " + dbg_sexpr(st)
+    return s + ")"
+
+def dbg_sexpr(n: list[str]) -> str:
+    let tag = n[0]
+    if tag == "program":
+        let mut s = "(program"
+        for it in n[1]:
+            s = s + " " + dbg_sexpr(it)
+        return s + ")"
+    if tag == "def":
+        let mut s = "(def " + n[1] + " (params"
+        for p in n[2]:
+            s = s + " (" + p[0] + " " + p[1] + ")"
+        s = s + ")"
+        if n[3] != "":
+            s = s + " -> " + n[3]
+        for st in n[4]:
+            s = s + " " + dbg_sexpr(st)
+        return s + ")"
+    if tag == "let":
+        let mut s = "(let " + n[1]
+        if n[4]:
+            s = s + " mut"
+        if n[2] != "":
+            s = s + ": " + n[2]
+        return s + " " + dbg_sexpr(n[3]) + ")"
+    if tag == "assign":
+        return "(assign " + dbg_sexpr(n[1]) + " " + dbg_sexpr(n[2]) + ")"
+    if tag == "if":
+        let mut s = "(if"
+        for br in n[1]:
+            s = s + " " + dbg_sexpr(br[0]) + " " + dbg_block(br[1])
+        if n[2] != nil:
+            s = s + " (else" + dbg_block(n[2]) + ")"
+        return s + ")"
+    if tag == "while":
+        return "(while " + dbg_sexpr(n[1]) + " " + dbg_block(n[2]) + ")"
+    if tag == "for":
+        return "(for " + n[1] + " in " + dbg_sexpr(n[2]) + " " + dbg_block(n[3]) + ")"
+    if tag == "return":
+        if n[1] == nil:
+            return "(return)"
+        return "(return " + dbg_sexpr(n[1]) + ")"
+    if tag == "break":
+        return "(break)"
+    if tag == "continue":
+        return "(continue)"
+    if tag == "expr":
+        return dbg_sexpr(n[1])
+    if tag == "num":
+        return str(n[1])
+    if tag == "str":
+        return "\"" + n[1] + "\""
+    if tag == "bool":
+        if n[1]:
+            return "true"
+        return "false"
+    if tag == "nil":
+        return "nil"
+    if tag == "var":
+        return n[1]
+    if tag == "list":
+        let mut s = "["
+        let mut i = 0
+        while i < len(n[1]):
+            if i > 0:
+                s = s + " "
+            s = s + dbg_sexpr(n[1][i])
+            i = i + 1
+        return s + "]"
+    if tag == "call":
+        let mut s = "(" + dbg_sexpr(n[1])
+        for a in n[2]:
+            s = s + " " + dbg_sexpr(a)
+        return s + ")"
+    if tag == "index":
+        return "(" + dbg_sexpr(n[1]) + "[" + dbg_sexpr(n[2]) + "])"
+    if tag == "bin":
+        return "(" + n[1] + " " + dbg_sexpr(n[2]) + " " + dbg_sexpr(n[3]) + ")"
+    if tag == "un":
+        return "(" + n[1] + " " + dbg_sexpr(n[2]) + ")"
+    return "(" + tag + ")"
+
+def main_cli():
+    let a = args()
+    if len(a) < 2:
+        fatal("usage: mandela <lex|ast|check> <file.mnd>")
+    let cmd = a[0]
+    if cmd != "lex" and cmd != "ast" and cmd != "check":
+        fatal("unknown command `" + cmd + "` (expected lex, ast or check)")
+    src_path = a[1]
+    let text = read_file(src_path)
+    src_lines = split(text, "\n")
+    let toks = lex(text)
+    if cmd == "lex":
+        dbg_tokens(toks)
+        exit(0)
+    let ast = parse(toks)
+    if cmd == "ast":
+        print(dbg_sexpr(ast))
+        exit(0)
+    let nerr = check_program(ast)
+    if nerr > 0:
+        exit(1)
+
+main_cli()
