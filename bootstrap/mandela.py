@@ -1013,6 +1013,12 @@ def main_work(argv):
     except RecursionError:
         sys.stderr.write("panic: stack overflow\n")
         return 101
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        except Exception:
+            pass
+        return 0
     except BreakEx:
         sys.stderr.write("error: `break` outside of a loop\n")
         return 1
