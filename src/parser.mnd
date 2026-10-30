@@ -1,0 +1,333 @@
+let mut p_toks = []
+let mut p_i = 0
+
+def p_peek() -> list[str]:
+    return p_toks[p_i]
+
+def p_next() -> list[str]:
+    let t = p_toks[p_i]
+    p_i = p_i + 1
+    return t
+
+def p_at(kind: str, val: str) -> bool:
+    let t = p_toks[p_i]
+    if val == "":
+        return t[0] == kind
+    return t[0] == kind and t[1] == val
+
+def p_eat(kind: str, val: str) -> list[str]:
+    if p_at(kind, val):
+        return p_next()
+    return nil
+
+def p_desc(t: list[str]) -> str:
+    if t[0] == "op" or t[0] == "kw":
+        return "`" + t[1] + "`"
+    if t[0] == "id":
+        return "identifier `" + t[1] + "`"
+    if t[0] == "int":
+        return "integer `" + str(t[1]) + "`"
+    if t[0] == "str":
+        return "string literal"
+    if t[0] == "nl":
+        return "end of line"
+    if t[0] == "indent":
+        return "an indented block"
+    if t[0] == "dedent":
+        return "end of block"
+    return "end of file"
+
+def p_expect(kind: str, val: str, what: str) -> list[str]:
+    if p_at(kind, val):
+        return p_next()
+    let t = p_peek()
+    die_parse("expected " + what + ", found " + p_desc(t), t[2], t[3])
+
+def parse(toks: list[str]) -> list[str]:
+    p_toks = toks
+    p_i = 0
+    let mut items = []
+    while true:
+        while p_at("nl", ""):
+            p_next()
+        if p_at("eof", ""):
+            break
+        if p_at("kw", "def"):
+            push(items, p_def())
+        else:
+            push(items, p_stmt())
+    return ["program", items, 1, 1]
+
+def p_def() -> list[str]:
+    p_next()
+    let name = p_expect("id", "", "a function name")
+    p_expect("op", "(", "`(`")
+    let mut params = []
+    if not p_at("op", ")"):
+        while true:
+            let pn = p_expect("id", "", "a parameter name")
+            p_expect("op", ":", "`:`")
+            let pt = p_type()
+            push(params, [pn[1], pt, pn[2], pn[3]])
+            if p_eat("op", ",") == nil:
+                break
+    p_expect("op", ")", "`)`")
+    let mut ret = ""
+    if p_eat("op", "->") != nil:
+        ret = p_type()
+    let body = p_block()
+    return ["def", name[1], params, ret, body, name[2], name[3]]
+
+def p_type() -> str:
+    let t = p_expect("id", "", "a type name")
+    if t[1] == "list":
+        p_expect("op", "[", "`[` after `list`")
+        let inner = p_type()
+        p_expect("op", "]", "`]`")
+        return "list[" + inner + "]"
+    return t[1]
+
+def p_block() -> list[str]:
+    p_expect("op", ":", "`:`")
+    if p_eat("nl", "") != nil:
+        if not p_at("indent", ""):
+            let t = p_peek()
+            die_parse("expected an indented block, found " + p_desc(t), t[2], t[3])
+        p_next()
+        let mut body = []
+        while not p_at("dedent", "") and not p_at("eof", ""):
+            while p_at("nl", ""):
+                p_next()
+            if p_at("dedent", "") or p_at("eof", ""):
+                break
+            push(body, p_stmt())
+        if not p_at("dedent", ""):
+            let t = p_peek()
+            die_parse("unexpected end of file: unclosed block", t[2], t[3])
+        p_next()
+        return body
+    return [p_simple()]
+
+def p_stmt() -> list[str]:
+    if p_at("kw", "if"):
+        return p_if()
+    if p_at("kw", "while"):
+        return p_while()
+    if p_at("kw", "for"):
+        return p_for()
+    return p_simple()
+
+def p_simple() -> list[str]:
+    let mut node = nil
+    if p_at("kw", "let"):
+        node = p_let()
+    elif p_at("kw", "return"):
+        node = p_return()
+    elif p_at("kw", "break"):
+        let t = p_next()
+        node = ["break", t[2], t[3]]
+    elif p_at("kw", "continue"):
+        let t = p_next()
+        node = ["continue", t[2], t[3]]
+    else:
+        node = p_assign_or_expr()
+    if p_at("nl", ""):
+        p_next()
+    elif not p_at("eof", "") and not p_at("dedent", ""):
+        let t = p_peek()
+        die_parse("expected end of line, found " + p_desc(t), t[2], t[3])
+    return node
+
+def p_let() -> list[str]:
+    p_next()
+    let mut m = false
+    if p_at("kw", "mut"):
+        p_next()
+        m = true
+    let name = p_expect("id", "", "a variable name")
+    let mut ty = ""
+    if p_eat("op", ":") != nil:
+        ty = p_type()
+    p_expect("op", "=", "`=`")
+    let val = p_expr()
+    return ["let", name[1], ty, val, m, name[2], name[3]]
+
+def p_return() -> list[str]:
+    let t = p_next()
+    let mut val = nil
+    if not p_at("nl", "") and not p_at("eof", "") and not p_at("dedent", ""):
+        val = p_expr()
+    return ["return", val, t[2], t[3]]
+
+def p_assign_or_expr() -> list[str]:
+    let e = p_expr()
+    if p_at("op", "="):
+        let op = p_next()
+        if e[0] != "var" and e[0] != "index":
+            die_parse("invalid assignment target", e[len(e) - 2], e[len(e) - 1])
+        let rhs = p_expr()
+        return ["assign", e, rhs, op[2], op[3]]
+    return ["expr", e, e[len(e) - 2], e[len(e) - 1]]
+
+def p_if() -> list[str]:
+    let t = p_next()
+    let mut branches = []
+    let cond = p_expr()
+    let body = p_block()
+    push(branches, [cond, body])
+    let mut els = nil
+    while true:
+        while p_at("nl", ""):
+            p_next()
+        if p_at("kw", "elif"):
+            p_next()
+            let c2 = p_expr()
+            let b2 = p_block()
+            push(branches, [c2, b2])
+        elif p_at("kw", "else"):
+            p_next()
+            els = p_block()
+            break
+        else:
+            break
+    return ["if", branches, els, t[2], t[3]]
+
+def p_while() -> list[str]:
+    let t = p_next()
+    let cond = p_expr()
+    let body = p_block()
+    return ["while", cond, body, t[2], t[3]]
+
+def p_for() -> list[str]:
+    let t = p_next()
+    let name = p_expect("id", "", "a loop variable name")
+    p_expect("kw", "in", "`in`")
+    let iter = p_expr()
+    let body = p_block()
+    return ["for", name[1], iter, body, t[2], t[3]]
+
+def p_expr() -> list[str]:
+    return p_or()
+
+def p_or() -> list[str]:
+    let e = p_and()
+    while p_at("kw", "or"):
+        let op = p_next()
+        let r = p_and()
+        e = ["bin", "or", e, r, op[2], op[3]]
+    return e
+
+def p_and() -> list[str]:
+    let e = p_not()
+    while p_at("kw", "and"):
+        let op = p_next()
+        let r = p_not()
+        e = ["bin", "and", e, r, op[2], op[3]]
+    return e
+
+def p_not() -> list[str]:
+    if p_at("kw", "not"):
+        let op = p_next()
+        let e = p_not()
+        return ["un", "not", e, op[2], op[3]]
+    return p_cmp()
+
+def p_cmp() -> list[str]:
+    let e = p_add()
+    let t = p_peek()
+    if t[0] == "op":
+        if t[1] == "==" or t[1] == "!=" or t[1] == "<" or t[1] == "<=" or t[1] == ">" or t[1] == ">=":
+            p_next()
+            let r = p_add()
+            return ["bin", t[1], e, r, t[2], t[3]]
+    return e
+
+def p_add() -> list[str]:
+    let e = p_mul()
+    while true:
+        let t = p_peek()
+        if t[0] == "op" and (t[1] == "+" or t[1] == "-"):
+            p_next()
+            let r = p_mul()
+            e = ["bin", t[1], e, r, t[2], t[3]]
+        else:
+            break
+    return e
+
+def p_mul() -> list[str]:
+    let e = p_unary()
+    while true:
+        let t = p_peek()
+        if t[0] == "op" and (t[1] == "*" or t[1] == "/" or t[1] == "%"):
+            p_next()
+            let r = p_unary()
+            e = ["bin", t[1], e, r, t[2], t[3]]
+        else:
+            break
+    return e
+
+def p_unary() -> list[str]:
+    if p_at("op", "-"):
+        let op = p_next()
+        let e = p_unary()
+        return ["un", "-", e, op[2], op[3]]
+    return p_postfix()
+
+def p_postfix() -> list[str]:
+    let e = p_atom()
+    while true:
+        if p_at("op", "("):
+            let op = p_next()
+            let mut args = []
+            if not p_at("op", ")"):
+                while true:
+                    push(args, p_expr())
+                    if p_eat("op", ",") == nil:
+                        break
+            p_expect("op", ")", "`)`")
+            e = ["call", e, args, op[2], op[3]]
+        elif p_at("op", "["):
+            let op = p_next()
+            let idx = p_expr()
+            p_expect("op", "]", "`]`")
+            e = ["index", e, idx, op[2], op[3]]
+        else:
+            break
+    return e
+
+def p_atom() -> list[str]:
+    let t = p_peek()
+    if t[0] == "int":
+        p_next()
+        return ["num", t[1], t[2], t[3]]
+    if t[0] == "str":
+        p_next()
+        return ["str", t[1], t[2], t[3]]
+    if t[0] == "id":
+        p_next()
+        return ["var", t[1], t[2], t[3]]
+    if t[0] == "kw" and t[1] == "true":
+        p_next()
+        return ["bool", true, t[2], t[3]]
+    if t[0] == "kw" and t[1] == "false":
+        p_next()
+        return ["bool", false, t[2], t[3]]
+    if t[0] == "kw" and t[1] == "nil":
+        p_next()
+        return ["nil", t[2], t[3]]
+    if t[0] == "op" and t[1] == "(":
+        p_next()
+        let e = p_expr()
+        p_expect("op", ")", "`)`")
+        return e
+    if t[0] == "op" and t[1] == "[":
+        p_next()
+        let mut items = []
+        if not p_at("op", "]"):
+            while true:
+                push(items, p_expr())
+                if p_eat("op", ",") == nil:
+                    break
+        p_expect("op", "]", "`]`")
+        return ["list", items, t[2], t[3]]
+    die_parse("expected an expression, found " + p_desc(t), t[2], t[3])
