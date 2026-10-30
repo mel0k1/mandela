@@ -60,6 +60,13 @@ class MStruct:
         self.vals = vals
 
 
+class MndDict:
+    __slots__ = ("d",)
+
+    def __init__(self):
+        self.d = {}
+
+
 KEYWORDS = {
     "def", "return", "if", "elif", "else", "while", "for", "in", "let",
     "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
@@ -330,6 +337,13 @@ class Parser:
             inner = self.parse_type()
             self.expect("op", "]", "`]`")
             return "list[%s]" % inner
+        if t[1] == "dict":
+            self.expect("op", "[", "`[` after `dict`")
+            k = self.parse_type()
+            self.expect("op", ",", "`,`")
+            v = self.parse_type()
+            self.expect("op", "]", "`]`")
+            return "dict[%s,%s]" % (k, v)
         return t[1]
 
     def parse_block(self):
@@ -559,6 +573,8 @@ class Parser:
             e = self.parse_expr()
             self.expect("op", ")", "`)`")
             return e
+        if t[0] == "op" and t[1] == "{":
+            return self.parse_dictlit()
         if t[0] == "op" and t[1] == "[":
             self.next()
             items = []
@@ -572,6 +588,22 @@ class Parser:
             self.expect("op", "]", "`]`")
             return ["list", items, t[2], t[3]]
         raise CompileError("expected an expression, found %s" % describe(t), t[2], t[3])
+
+    def parse_dictlit(self):
+        t = self.next()
+        pairs = []
+        if not self.at("op", "}"):
+            while True:
+                k = self.parse_expr()
+                self.expect("op", ":", "`:`")
+                v = self.parse_expr()
+                pairs.append([k, v, k[-2], k[-1]])
+                if not self.eat("op", ","):
+                    break
+                if self.at("op", "}"):
+                    break
+        self.expect("op", "}", "`}`")
+        return ["dict", pairs, t[2], t[3]]
 
     def parse_slit(self):
         name = self.next()
@@ -610,6 +642,8 @@ def type_name(v):
         return "str"
     if isinstance(v, list):
         return "list"
+    if isinstance(v, MndDict):
+        return "dict"
     if isinstance(v, MStruct):
         return v.sd.name
     return type(v).__name__
@@ -617,6 +651,13 @@ def type_name(v):
 
 def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def wrap64(v):
+    v &= (1 << 64) - 1
+    if v >= 1 << 63:
+        v -= 1 << 64
+    return v
 
 
 def truthy(v):
@@ -642,6 +683,15 @@ def ml_eq(a, b):
         if a.sd.name != b.sd.name:
             return False
         return all(ml_eq(a.vals[f[0]], b.vals[f[0]]) for f in a.sd.fields)
+    if isinstance(a, MndDict) or isinstance(b, MndDict):
+        if not (isinstance(a, MndDict) and isinstance(b, MndDict)):
+            return False
+        if len(a.d) != len(b.d):
+            return False
+        for k in a.d:
+            if k not in b.d or not ml_eq(a.d[k], b.d[k]):
+                return False
+        return True
     return a == b
 
 
@@ -679,6 +729,10 @@ def format_value(v, nested=False):
         parts = ["%s: %s" % (f[0], format_value(v.vals[f[0]], True))
                  for f in v.sd.fields]
         return "%s { %s }" % (v.sd.name, ", ".join(parts))
+    if isinstance(v, MndDict):
+        parts = ["%s: %s" % (format_value(k, True), format_value(x, True))
+                 for k, x in v.d.items()]
+        return "{" + ", ".join(parts) + "}"
     return str(v)
 
 
@@ -702,7 +756,9 @@ def bi_len(args, ip):
     v = one_arg(args, "len()")
     if isinstance(v, str) or isinstance(v, list):
         return len(v)
-    raise Panic("expected `str` or `list` in len(), found `%s`" % type_name(v))
+    if isinstance(v, MndDict):
+        return len(v.d)
+    raise Panic("expected `str`, a list or a dict in len(), found `%s`" % type_name(v))
 
 
 def bi_str(args, ip):
@@ -826,6 +882,8 @@ def bi_range(args, ip):
     for a in args:
         if not is_int(a):
             raise Panic("range() expects `int` arguments, found `%s`" % type_name(a))
+    if len(args) == 3 and args[2] == 0:
+        raise Panic("range() arg 3 must not be zero")
     if len(args) == 1:
         return range(args[0])
     if len(args) == 2:
@@ -845,6 +903,142 @@ def bi_exit(args, ip):
     if not is_int(code):
         raise Panic("exit() expects an `int` code")
     raise Fatal(None, code)
+
+
+def m_arity(args, n, name):
+    if len(args) != n:
+        raise Panic("%s() takes exactly %d argument%s but %d were given"
+                    % (name, n, "" if n == 1 else "s", len(args)))
+
+
+def require_key(v, name):
+    if not is_int(v) and not isinstance(v, str):
+        raise Panic("dict key must be `str` or `int`, found `%s`" % type_name(v))
+    return v
+
+
+def sm_upper(s, args):
+    m_arity(args, 0, "upper")
+    return s.upper()
+
+
+def sm_lower(s, args):
+    m_arity(args, 0, "lower")
+    return s.lower()
+
+
+def sm_trim(s, args):
+    m_arity(args, 0, "trim")
+    return s.strip()
+
+
+def sm_split(s, args):
+    return bi_split([s] + list(args), None)
+
+
+def sm_contains(s, args):
+    m_arity(args, 1, "contains")
+    if not isinstance(args[0], str):
+        raise Panic("contains() expects a `str` argument")
+    return args[0] in s
+
+
+def sm_starts_with(s, args):
+    m_arity(args, 1, "starts_with")
+    if not isinstance(args[0], str):
+        raise Panic("starts_with() expects a `str` argument")
+    return s.startswith(args[0])
+
+
+def sm_ends_with(s, args):
+    m_arity(args, 1, "ends_with")
+    if not isinstance(args[0], str):
+        raise Panic("ends_with() expects a `str` argument")
+    return s.endswith(args[0])
+
+
+def sm_replace(s, args):
+    m_arity(args, 2, "replace")
+    old, new = args
+    if not isinstance(old, str) or not isinstance(new, str):
+        raise Panic("replace() expects two `str` arguments")
+    if old == "":
+        raise Panic("replace() old must not be empty")
+    return s.replace(old, new)
+
+
+def sm_find(s, args):
+    m_arity(args, 1, "find")
+    if not isinstance(args[0], str):
+        raise Panic("find() expects a `str` argument")
+    return s.find(args[0])
+
+
+def sm_substr(s, args):
+    return bi_substr([s] + list(args), None)
+
+
+def sm_repeat(s, args):
+    m_arity(args, 1, "repeat")
+    if not is_int(args[0]):
+        raise Panic("repeat() expects an `int` argument, found `%s`"
+                    % type_name(args[0]))
+    return s * args[0] if args[0] > 0 else ""
+
+
+def sm_chars(s, args):
+    m_arity(args, 0, "chars")
+    return list(s)
+
+
+STR_METHODS = {
+    "upper": sm_upper, "lower": sm_lower, "trim": sm_trim, "split": sm_split,
+    "contains": sm_contains, "starts_with": sm_starts_with,
+    "ends_with": sm_ends_with, "replace": sm_replace, "find": sm_find,
+    "substr": sm_substr, "repeat": sm_repeat, "chars": sm_chars,
+}
+
+
+def dm_keys(d, args):
+    m_arity(args, 0, "keys")
+    return list(d.d.keys())
+
+
+def dm_values(d, args):
+    m_arity(args, 0, "values")
+    return list(d.d.values())
+
+
+def dm_has(d, args):
+    m_arity(args, 1, "has")
+    return require_key(args[0], "has") in d.d
+
+
+def dm_remove(d, args):
+    m_arity(args, 1, "remove")
+    return d.d.pop(require_key(args[0], "remove"), _MISSING) is not _MISSING
+
+
+_MISSING = object()
+
+
+DICT_METHODS = {
+    "keys": dm_keys, "values": dm_values, "has": dm_has, "remove": dm_remove,
+}
+
+
+def call_str_method(s, name, args):
+    fn = STR_METHODS.get(name)
+    if fn is None:
+        raise Panic("no method `%s` on type `str`" % name)
+    return fn(s, args)
+
+
+def call_dict_method(d, name, args):
+    fn = DICT_METHODS.get(name)
+    if fn is None:
+        raise Panic("no method `%s` on type `dict`" % name)
+    return fn(d, args)
 
 
 BUILTINS = {
@@ -924,11 +1118,13 @@ class Interp:
             seq = it
         elif isinstance(it, str):
             seq = list(it)
+        elif isinstance(it, MndDict):
+            seq = list(it.d.keys())
         else:
             require_list(it)
             seq = it
-        benv = Env(env)
         for x in seq:
+            benv = Env(env)
             benv.vars[node[1]] = x
             try:
                 self.exec_block(node[3], benv)
@@ -960,8 +1156,14 @@ class Interp:
             base.vals[target[2]] = val
             return
         base = self.eval(target[1], env)
-        idx = require_index(self.eval(target[2], env))
+        raw = self.eval(target[2], env)
         val = self.eval(node[2], env)
+        if isinstance(base, MndDict):
+            if not is_int(raw) and not isinstance(raw, str):
+                raise Panic("dict key must be `str` or `int`, found `%s`" % type_name(raw))
+            base.d[raw] = val
+            return
+        idx = require_index(raw)
         if isinstance(base, str):
             raise Panic("strings are immutable: cannot assign to a string index")
         require_list(base)
@@ -985,6 +1187,11 @@ class Interp:
             raise Panic("undefined variable '%s'" % name)
         if tag == "list":
             return [self.eval(x, env) for x in node[1]]
+        if tag == "dict":
+            d = MndDict()
+            for p in node[1]:
+                d.d[self.eval(p[0], env)] = self.eval(p[1], env)
+            return d
         if tag == "slit":
             return self.eval_slit(node, env)
         if tag == "field":
@@ -993,7 +1200,15 @@ class Interp:
             return self.eval_call(node, env)
         if tag == "index":
             base = self.eval(node[1], env)
-            idx = require_index(self.eval(node[2], env))
+            raw = self.eval(node[2], env)
+            if isinstance(base, MndDict):
+                if not is_int(raw) and not isinstance(raw, str):
+                    raise Panic("dict key must be `str` or `int`, found `%s`"
+                                % type_name(raw))
+                if raw not in base.d:
+                    raise Panic("no key `%s` in dict" % raw)
+                return base.d[raw]
+            idx = require_index(raw)
             if isinstance(base, str):
                 if idx < 0 or idx >= len(base):
                     panic_index(len(base), idx)
@@ -1009,7 +1224,7 @@ class Interp:
             if node[1] == "-":
                 if not is_int(v):
                     raise Panic("cannot apply unary `-` to type `%s`" % type_name(v))
-                return -v
+                return wrap64(-v)
             return not truthy(v)
         raise Panic("interpreter error: unknown expression '%s'" % tag)
 
@@ -1073,6 +1288,11 @@ class Interp:
         fnode = node[1]
         base = self.eval(fnode[1], env)
         mname = fnode[2]
+        args = [self.eval(a, env) for a in node[2]]
+        if isinstance(base, str):
+            return call_str_method(base, mname, args)
+        if isinstance(base, MndDict):
+            return call_dict_method(base, mname, args)
         if not isinstance(base, MStruct):
             raise Panic("no method `%s` on type `%s`" % (mname, type_name(base)))
         m = base.sd.methods.get(mname)
@@ -1081,7 +1301,6 @@ class Interp:
         params, body = m
         if not params:
             raise Panic("method `%s` has no `self` parameter" % mname)
-        args = [self.eval(a, env) for a in node[2]]
         rest = params[1:]
         if len(args) != len(rest):
             raise Panic("method `%s` takes %d argument(s) but %d were given"
@@ -1112,7 +1331,7 @@ class Interp:
             if isinstance(l, str) and isinstance(r, str):
                 return l + r
             if is_int(l) and is_int(r):
-                return l + r
+                return wrap64(l + r)
             raise Panic("cannot apply operator `+` to types `%s` and `%s`"
                         % (type_name(l), type_name(r)))
         if op in ("-", "*", "/", "%"):
@@ -1120,16 +1339,16 @@ class Interp:
                 raise Panic("cannot apply operator `%s` to types `%s` and `%s`"
                             % (op, type_name(l), type_name(r)))
             if op == "-":
-                return l - r
+                return wrap64(l - r)
             if op == "*":
-                return l * r
+                return wrap64(l * r)
             if r == 0:
                 if op == "/":
                     raise Panic("attempt to divide by zero")
                 raise Panic("attempt to calculate the remainder with a divisor of zero")
             if op == "/":
                 q = abs(l) // abs(r)
-                return q if (l >= 0) == (r >= 0) else -q
+                return wrap64(q if (l >= 0) == (r >= 0) else -q)
             m = abs(l) % abs(r)
             return m if l >= 0 else -m
         if op == "==":
