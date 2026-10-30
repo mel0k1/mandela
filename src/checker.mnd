@@ -1,0 +1,500 @@
+let mut c_funcs = []
+let mut c_errs = []
+let mut c_warns = []
+let mut c_scopes = [[]]
+let mut c_loop = 0
+let mut c_fn = false
+let mut c_infor = false
+let mut c_ret = ""
+let mut c_retc = 0
+
+def ck_builtins() -> list[str]:
+    return ["print", "len", "str", "int", "chr", "ord", "push", "pop", "split",
+            "substr", "read_file", "write_file", "args", "fatal", "exit"]
+
+def ck_is_builtin(name: str) -> bool:
+    for b in ck_builtins():
+        if b == name:
+            return true
+    return false
+
+def ck_find_fn(name: str) -> list[str]:
+    let mut i = 0
+    while i < len(c_funcs):
+        if c_funcs[i][0] == name:
+            return c_funcs[i]
+        i = i + 1
+    return nil
+
+def ck_err(code: str, msg: str, line: int, col: int):
+    push(c_errs, fmt_error("error", code, msg, line, col))
+
+def ck_valid_type(t: str) -> bool:
+    if t == "int" or t == "str" or t == "bool" or t == "nil":
+        return true
+    if len(t) >= 7 and substr(t, 0, 5) == "list[" and substr(t, len(t) - 1, 1) == "]":
+        return ck_valid_type(substr(t, 5, len(t) - 6))
+    return false
+
+def ck_elem(t: str) -> str:
+    return substr(t, 5, len(t) - 6)
+
+def ck_declare(name: str, ty: str, is_mut: bool, kind: str, line: int, col: int):
+    push(c_scopes[len(c_scopes) - 1], [name, ty, is_mut, 0, kind, line, col])
+
+def ck_lookup(name: str) -> list[str]:
+    let mut si = len(c_scopes) - 1
+    while si >= 0:
+        let sc = c_scopes[si]
+        let mut i = len(sc) - 1
+        while i >= 0:
+            if sc[i][0] == name:
+                return sc[i]
+            i = i - 1
+        si = si - 1
+    return nil
+
+def ck_unused():
+    let sc = c_scopes[len(c_scopes) - 1]
+    for v in sc:
+        if v[3] == 0 and v[4] == "let" and substr(v[0], 0, 1) != "_":
+            push(c_warns, fmt_error("warning", "", "unused variable `" + v[0] + "`", v[5], v[6]))
+
+def ck_node_pos(n: list[str]) -> list[int]:
+    return [n[len(n) - 3], n[len(n) - 2]]
+
+def check_program(ast: list[str]) -> int:
+    c_funcs = []
+    c_errs = []
+    c_warns = []
+    c_scopes = [[]]
+    c_loop = 0
+    c_fn = false
+    for it in ast[1]:
+        if it[0] == "def":
+            ck_collect_fn(it)
+    for it in ast[1]:
+        if it[0] == "def":
+            ck_fn(it)
+        else:
+            ck_stmt(it)
+    for e in c_errs:
+        eprint(e)
+    if len(c_errs) == 0:
+        for w in c_warns:
+            eprint(w)
+    return len(c_errs)
+
+def ck_collect_fn(d: list[str]):
+    let name = d[1]
+    if ck_find_fn(name) != nil or ck_is_builtin(name):
+        ck_err("E0428", "the name `" + name + "` is defined multiple times", d[5], d[6])
+        return
+    let mut ptypes = []
+    for p in d[2]:
+        if not ck_valid_type(p[1]):
+            ck_err("E0412", "cannot find type `" + p[1] + "` in this scope", p[2], p[3])
+        push(ptypes, p[1])
+    if d[3] != "" and not ck_valid_type(d[3]):
+        ck_err("E0412", "cannot find type `" + d[3] + "` in this scope", d[5], d[6])
+    push(c_funcs, [name, ptypes, d[3]])
+
+def ck_fn(d: list[str]):
+    c_fn = true
+    c_ret = d[3]
+    c_retc = 0
+    push(c_scopes, [])
+    for p in d[2]:
+        ck_declare(p[0], p[1], true, "parameter", p[2], p[3])
+    for s in d[4]:
+        ck_stmt(s)
+    ck_unused()
+    pop(c_scopes)
+    if c_ret != "" and c_ret != "nil" and c_retc == 0:
+        push(c_warns, fmt_error("warning", "", "function `" + d[1] + "` is declared to return `" + c_ret + "` but has no `return`", d[5], d[6]))
+    c_fn = false
+
+def ck_stmt(node: list[str]):
+    let tag = node[0]
+    if tag == "let":
+        ck_let(node)
+    elif tag == "assign":
+        ck_assign(node)
+    elif tag == "expr":
+        ck_expr(node[1])
+    elif tag == "return":
+        ck_return(node)
+    elif tag == "if":
+        for br in node[1]:
+            ck_cond(br[0])
+            push(c_scopes, [])
+            for s in br[1]:
+                ck_stmt(s)
+            pop(c_scopes)
+        if node[2] != nil:
+            push(c_scopes, [])
+            for s in node[2]:
+                ck_stmt(s)
+            pop(c_scopes)
+    elif tag == "while":
+        ck_cond(node[1])
+        c_loop = c_loop + 1
+        push(c_scopes, [])
+        for s in node[2]:
+            ck_stmt(s)
+        pop(c_scopes)
+        c_loop = c_loop - 1
+    elif tag == "for":
+        ck_for(node)
+    elif tag == "break":
+        if c_loop == 0:
+            ck_err("E0268", "`break` outside of a loop", node[1], node[2])
+    elif tag == "continue":
+        if c_loop == 0:
+            ck_err("E0267", "`continue` outside of a loop", node[1], node[2])
+
+def ck_cond(node: list[str]):
+    let t = ck_expr(node)
+    if t != "bool":
+        let pos = ck_node_pos(node)
+        ck_err("E0308", "mismatched types: expected `bool`, found `" + t + "`", pos[0], pos[1])
+
+def ck_let(node: list[str]):
+    let t = ck_expr(node[3])
+    let ann = node[2]
+    if ann != "":
+        if not ck_valid_type(ann):
+            ck_err("E0412", "cannot find type `" + ann + "` in this scope", node[5], node[6])
+        if t == "list[_]":
+            let lit = node[3]
+            lit[len(lit) - 1] = ann
+            t = ann
+        elif t != ann:
+            ck_err("E0308", "mismatched types: expected `" + ann + "`, found `" + t + "`", node[5], node[6])
+    elif t == "list[_]":
+        ck_err("E0282", "type annotations needed", node[5], node[6])
+    ck_declare(node[1], t, node[4], "let", node[5], node[6])
+
+def ck_assign(node: list[str]):
+    let target = node[1]
+    if target[0] == "var":
+        let e = ck_lookup(target[1])
+        if e == nil:
+            ck_err("E0425", "cannot find value `" + target[1] + "` in this scope", target[2], target[3])
+            ck_expr(node[2])
+            return
+        e[3] = e[3] + 1
+        if not e[2]:
+            ck_err("E0384", "cannot assign to `" + target[1] + "`, as it is not declared as mutable", target[2], target[3])
+        let rt = ck_expr(node[2])
+        if rt == "list[_]":
+            let lit = node[2]
+            lit[len(lit) - 1] = e[1]
+        elif rt != e[1]:
+            ck_err("E0308", "mismatched types: expected `" + e[1] + "`, found `" + rt + "`", target[2], target[3])
+    else:
+        let bt = ck_expr(target[1])
+        let it = ck_expr(target[2])
+        if it != "int":
+            ck_err("E0308", "mismatched types: index must be `int`, found `" + it + "`", target[3], target[4])
+        if bt == "str":
+            ck_err("E0594", "`str` is immutable: cannot assign to a string index", target[3], target[4])
+        elif bt != "list[_]" and substr(bt, 0, 5) != "list[":
+            ck_err("E0308", "cannot assign to an index of type `" + bt + "`", target[3], target[4])
+        else:
+            let et = ck_elem(bt)
+            let rt = ck_expr(node[2])
+            if rt == "list[_]":
+                let lit = node[2]
+                lit[len(lit) - 1] = et
+            elif rt != et:
+                ck_err("E0308", "mismatched types: expected `" + et + "`, found `" + rt + "`", target[3], target[4])
+
+def ck_return(node: list[str]):
+    c_retc = c_retc + 1
+    if not c_fn:
+        ck_err("E0572", "`return` outside of a function", node[2], node[3])
+        if node[1] != nil:
+            ck_expr(node[1])
+        return
+    if node[1] == nil:
+        if c_ret != "" and c_ret != "nil":
+            ck_err("E0308", "mismatched types: expected `" + c_ret + "`, found `nil`", node[2], node[3])
+        return
+    let t = ck_expr(node[1])
+    if c_ret == "":
+        ck_err("E0308", "this function has no return type, so it cannot return a value", node[2], node[3])
+    elif t == "list[_]":
+        let lit = node[1]
+        lit[len(lit) - 1] = c_ret
+    elif t != c_ret:
+        ck_err("E0308", "mismatched types: expected `" + c_ret + "`, found `" + t + "`", node[2], node[3])
+
+def ck_for(node: list[str]):
+    let iter = node[2]
+    c_infor = true
+    let vt = ck_expr(iter)
+    c_infor = false
+    let pos = ck_node_pos(iter)
+    push(c_scopes, [])
+    if vt == "range":
+        ck_declare(node[1], "int", false, "loopvar", node[4], node[5])
+    elif vt == "str":
+        ck_declare(node[1], "str", false, "loopvar", node[4], node[5])
+    elif substr(vt, 0, 5) == "list[":
+        ck_declare(node[1], ck_elem(vt), false, "loopvar", node[4], node[5])
+    else:
+        ck_err("E0277", "`" + vt + "` is not an iterator", pos[0], pos[1])
+        ck_declare(node[1], "int", false, "loopvar", node[4], node[5])
+    c_loop = c_loop + 1
+    for s in node[3]:
+        ck_stmt(s)
+    c_loop = c_loop - 1
+    pop(c_scopes)
+
+def ck_expr(node: list[str]) -> str:
+    let tag = node[0]
+    let mut t = "nil"
+    if tag == "num":
+        t = "int"
+    elif tag == "str":
+        t = "str"
+    elif tag == "bool":
+        t = "bool"
+    elif tag == "nil":
+        t = "nil"
+    elif tag == "var":
+        let e = ck_lookup(node[1])
+        if e == nil:
+            ck_err("E0425", "cannot find value `" + node[1] + "` in this scope", node[2], node[3])
+            t = "int"
+        else:
+            e[3] = e[3] + 1
+            t = e[1]
+    elif tag == "list":
+        t = ck_list(node)
+    elif tag == "call":
+        t = ck_call(node)
+    elif tag == "index":
+        let bt = ck_expr(node[1])
+        let it = ck_expr(node[2])
+        if it != "int":
+            ck_err("E0308", "mismatched types: index must be `int`, found `" + it + "`", node[3], node[4])
+        if bt == "str":
+            t = "str"
+        elif bt == "list[_]" or substr(bt, 0, 5) == "list[":
+            t = ck_elem(bt)
+        else:
+            ck_err("E0277", "cannot index into a value of type `" + bt + "`", node[3], node[4])
+            t = "int"
+    elif tag == "bin":
+        t = ck_bin(node)
+    elif tag == "un":
+        let et = ck_expr(node[2])
+        if node[1] == "-":
+            if et != "int":
+                ck_err("E0369", "cannot apply unary operator `-` to type `" + et + "`", node[3], node[4])
+            t = "int"
+        else:
+            if et != "bool":
+                ck_err("E0308", "mismatched types: expected `bool`, found `" + et + "`", node[3], node[4])
+            t = "bool"
+    push(node, t)
+    return t
+
+def ck_list(node: list[str]) -> str:
+    if len(node[1]) == 0:
+        return "list[_]"
+    let t0 = ck_expr(node[1][0])
+    let mut i = 1
+    while i < len(node[1]):
+        let x = node[1][i]
+        let xt = ck_expr(x)
+        if xt != t0 and xt != "list[_]":
+            let pos = ck_node_pos(x)
+            ck_err("E0308", "mismatched types in a list literal: expected `" + t0 + "`, found `" + xt + "`", pos[0], pos[1])
+        i = i + 1
+    return "list[" + t0 + "]"
+
+def ck_bin(node: list[str]) -> str:
+    let op = node[1]
+    if op == "and" or op == "or":
+        ck_bool_arg(node[2])
+        ck_bool_arg(node[3])
+        return "bool"
+    let lt = ck_expr(node[2])
+    let rt = ck_expr(node[3])
+    if op == "==" or op == "!=":
+        if lt != rt and lt != "list[_]" and rt != "list[_]":
+            ck_err("E0308", "mismatched types: cannot compare `" + lt + "` with `" + rt + "`", node[4], node[5])
+        return "bool"
+    if op == "<" or op == "<=" or op == ">" or op == ">=":
+        if (lt == "int" and rt == "int") or (lt == "str" and rt == "str"):
+            return "bool"
+        ck_err("E0369", "cannot compare `" + lt + "` with `" + rt + "`", node[4], node[5])
+        return "bool"
+    if op == "+":
+        if lt == "int" and rt == "int":
+            return "int"
+        if lt == "str" and rt == "str":
+            return "str"
+    if op == "-" or op == "*" or op == "/" or op == "%":
+        if lt == "int" and rt == "int":
+            return "int"
+    ck_err("E0369", "cannot apply operator `" + op + "` to types `" + lt + "` and `" + rt + "`", node[4], node[5])
+    return "int"
+
+def ck_bool_arg(node: list[str]):
+    let t = ck_expr(node)
+    if t != "bool":
+        let pos = ck_node_pos(node)
+        ck_err("E0308", "mismatched types: expected `bool`, found `" + t + "`", pos[0], pos[1])
+
+def ck_call(node: list[str]) -> str:
+    let fnode = node[1]
+    let args = node[2]
+    let pos = [node[3], node[4]]
+    if fnode[0] != "var":
+        ck_err("E0618", "cannot call a non-function expression", pos[0], pos[1])
+        for a in args:
+            ck_expr(a)
+        return "int"
+    let name = fnode[1]
+    let n = len(args)
+    if name == "print":
+        ck_arity(1, n, pos)
+        for a in args:
+            ck_expr(a)
+        return "nil"
+    if name == "len":
+        ck_arity(1, n, pos)
+        let t = ck_expr(args[0])
+        if t != "str" and substr(t, 0, 5) != "list[":
+            ck_err("E0308", "expected `str` or a list, found `" + t + "`", pos[0], pos[1])
+        return "int"
+    if name == "str":
+        ck_arity(1, n, pos)
+        for a in args:
+            ck_expr(a)
+        return "str"
+    if name == "int":
+        ck_arity(1, n, pos)
+        let t = ck_expr(args[0])
+        if t != "str" and t != "int":
+            ck_err("E0308", "expected `str` or `int`, found `" + t + "`", pos[0], pos[1])
+        return "int"
+    if name == "chr":
+        ck_arity(1, n, pos)
+        let t = ck_expr(args[0])
+        if t != "int":
+            ck_err("E0308", "expected `int`, found `" + t + "`", pos[0], pos[1])
+        return "str"
+    if name == "ord":
+        ck_arity(1, n, pos)
+        let t = ck_expr(args[0])
+        if t != "str":
+            ck_err("E0308", "expected `str`, found `" + t + "`", pos[0], pos[1])
+        return "int"
+    if name == "push":
+        ck_arity(2, n, pos)
+        let lt = ck_expr(args[0])
+        if substr(lt, 0, 5) != "list[":
+            ck_err("E0308", "expected a list as the first argument of `push`, found `" + lt + "`", pos[0], pos[1])
+            ck_expr(args[1])
+            return "nil"
+        let et = ck_elem(lt)
+        if et == "list[_]":
+            ck_err("E0282", "type annotations needed", pos[0], pos[1])
+        let vt = ck_expr(args[1])
+        if vt == "list[_]":
+            let lit = args[1]
+            lit[len(lit) - 1] = et
+        elif vt != et:
+            ck_err("E0308", "mismatched types: expected `" + et + "`, found `" + vt + "`", pos[0], pos[1])
+        return lt
+    if name == "pop":
+        ck_arity(1, n, pos)
+        let lt = ck_expr(args[0])
+        if substr(lt, 0, 5) != "list[":
+            ck_err("E0308", "expected a list, found `" + lt + "`", pos[0], pos[1])
+            return "int"
+        let et = ck_elem(lt)
+        if et == "list[_]":
+            ck_err("E0282", "type annotations needed", pos[0], pos[1])
+            et = "int"
+        return et
+    if name == "split":
+        ck_arity(2, n, pos)
+        ck_typed_arg(args[0], "str")
+        ck_typed_arg(args[1], "str")
+        return "list[str]"
+    if name == "substr":
+        ck_arity(3, n, pos)
+        ck_typed_arg(args[0], "str")
+        ck_typed_arg(args[1], "int")
+        ck_typed_arg(args[2], "int")
+        return "str"
+    if name == "read_file":
+        ck_arity(1, n, pos)
+        ck_typed_arg(args[0], "str")
+        return "str"
+    if name == "write_file":
+        ck_arity(2, n, pos)
+        ck_typed_arg(args[0], "str")
+        ck_typed_arg(args[1], "str")
+        return "nil"
+    if name == "args":
+        if n != 0:
+            ck_err("E0061", "this function takes 0 arguments but " + str(n) + " were supplied", pos[0], pos[1])
+        return "list[str]"
+    if name == "fatal":
+        ck_arity(1, n, pos)
+        ck_typed_arg(args[0], "str")
+        return "nil"
+    if name == "exit":
+        ck_arity(1, n, pos)
+        ck_typed_arg(args[0], "int")
+        return "nil"
+    if name == "range":
+        if not c_infor:
+            ck_err("E0308", "`range` is only allowed in `for` loops", pos[0], pos[1])
+        if n < 1 or n > 3:
+            ck_err("E0061", "this function takes 1 to 3 arguments but " + str(n) + " were supplied", pos[0], pos[1])
+        for a in args:
+            ck_typed_arg(a, "int")
+        return "range"
+    let f = ck_find_fn(name)
+    if f == nil:
+        let v = ck_lookup(name)
+        if v != nil:
+            ck_err("E0618", "cannot call non-function value `" + name + "` of type `" + v[1] + "`", pos[0], pos[1])
+        else:
+            ck_err("E0425", "cannot find function `" + name + "` in this scope", pos[0], pos[1])
+        for a in args:
+            ck_expr(a)
+        return "int"
+    if n != len(f[1]):
+        ck_err("E0061", "this function takes " + arg_word(len(f[1])) + " but " + str(n) + " arguments were supplied", pos[0], pos[1])
+    let mut i = 0
+    while i < n and i < len(f[1]):
+        let at = ck_expr(args[i])
+        if at == "list[_]":
+            let lit = args[i]
+            lit[len(lit) - 1] = f[1][i]
+        elif at != f[1][i]:
+            let apos = ck_node_pos(args[i])
+            ck_err("E0308", "mismatched types: expected `" + f[1][i] + "`, found `" + at + "`", apos[0], apos[1])
+        i = i + 1
+    if f[2] == "":
+        return "nil"
+    return f[2]
+
+def ck_arity(want: int, got: int, pos: list[int]):
+    if want != got:
+        ck_err("E0061", "this function takes " + arg_word(want) + " but " + str(got) + " arguments were supplied", pos[0], pos[1])
+
+def ck_typed_arg(node: list[str], want: str):
+    let t = ck_expr(node)
+    if t != want:
+        let pos = ck_node_pos(node)
+        ck_err("E0308", "mismatched types: expected `" + want + "`, found `" + t + "`", pos[0], pos[1])
