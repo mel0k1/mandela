@@ -1,0 +1,167 @@
+def lx_keywords() -> list[str]:
+    return ["def", "return", "if", "elif", "else", "while", "for", "in", "let",
+            "mut", "true", "false", "nil", "and", "or", "not", "break", "continue"]
+
+def lx_is_kw(w: str) -> bool:
+    for k in lx_keywords():
+        if k == w:
+            return true
+    return false
+
+def lx_is_digit(c: str) -> bool:
+    return c >= "0" and c <= "9"
+
+def lx_is_ident_start(c: str) -> bool:
+    return (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "_"
+
+def lx_is_ident_char(c: str) -> bool:
+    return lx_is_ident_start(c) or lx_is_digit(c)
+
+def lx_strip_indent(s: str) -> list[str]:
+    let mut i = 0
+    let mut width = 0
+    while i < len(s) and (s[i] == " " or s[i] == "\t"):
+        if s[i] == " ":
+            width = width + 1
+        else:
+            width = width + 4
+        i = i + 1
+    return [substr(s, i, len(s) - i), i, width]
+
+def lx_last_kind(st: list[str]) -> str:
+    let t = st[0]
+    if len(t) == 0:
+        return ""
+    return t[len(t) - 1][0]
+
+def lx_last_indent(st: list[str]) -> int:
+    return st[1][len(st[1]) - 1]
+
+def lx_emit(st: list[str], kind: str, val: str, line: int, col: int):
+    push(st[0], [kind, val, line, col])
+
+def lx_string(st: list[str], s: str, j: int, line: int, col: int) -> int:
+    let n = len(s)
+    let mut k = j + 1
+    let mut out = ""
+    while k < n:
+        let c = s[k]
+        if c == "\"":
+            lx_emit(st, "str", out, line, col)
+            return k + 1
+        if c == "\\":
+            if k + 1 >= n:
+                die_parse("unterminated string literal", line, col)
+            let e = s[k + 1]
+            if e == "n":
+                out = out + "\n"
+            elif e == "t":
+                out = out + "\t"
+            elif e == "r":
+                out = out + "\r"
+            elif e == "0":
+                out = out + "\0"
+            elif e == "\"":
+                out = out + "\""
+            elif e == "\\":
+                out = out + "\\"
+            else:
+                die_parse("invalid escape sequence `\\" + e + "`", line, col)
+            k = k + 2
+        else:
+            out = out + c
+            k = k + 1
+    die_parse("unterminated string literal", line, col)
+
+def lx_line(st: list[str], content: str, basecol: int):
+    let line = st[3]
+    let n = len(content)
+    let mut j = 0
+    while j < n:
+        let c = content[j]
+        if c == " " or c == "\t":
+            j = j + 1
+        elif c == "#":
+            break
+        else:
+            let col = basecol + j + 1
+            if lx_is_digit(c):
+                let mut v = 0
+                while j < n and lx_is_digit(content[j]):
+                    v = v * 10 + ord(content[j]) - 48
+                    j = j + 1
+                lx_emit(st, "int", v, line, col)
+            elif lx_is_ident_start(c):
+                let mut w = ""
+                while j < n and lx_is_ident_char(content[j]):
+                    w = w + content[j]
+                    j = j + 1
+                if lx_is_kw(w):
+                    lx_emit(st, "kw", w, line, col)
+                else:
+                    lx_emit(st, "id", w, line, col)
+            elif c == "\"":
+                j = lx_string(st, content, j, line, col)
+            else:
+                let two = substr(content, j, 2)
+                if two == "->" or two == "==" or two == "!=" or two == "<=" or two == ">=":
+                    lx_emit(st, "op", two, line, col)
+                    j = j + 2
+                elif c == "+" or c == "-" or c == "*" or c == "/" or c == "%":
+                    lx_emit(st, "op", c, line, col)
+                    j = j + 1
+                elif c == "=" or c == "<" or c == ">":
+                    lx_emit(st, "op", c, line, col)
+                    j = j + 1
+                elif c == "(" or c == "[":
+                    lx_emit(st, "op", c, line, col)
+                    st[2] = st[2] + 1
+                    j = j + 1
+                elif c == ")" or c == "]":
+                    lx_emit(st, "op", c, line, col)
+                    if st[2] > 0:
+                        st[2] = st[2] - 1
+                    j = j + 1
+                elif c == "," or c == ":":
+                    lx_emit(st, "op", c, line, col)
+                    j = j + 1
+                else:
+                    die_parse("unexpected character `" + c + "`", line, col)
+    if st[2] == 0 and lx_last_kind(st) != "":
+        let k = lx_last_kind(st)
+        if k != "nl" and k != "indent" and k != "dedent":
+            lx_emit(st, "nl", "", line, basecol + n + 1)
+
+def lex(text: str) -> list[str]:
+    let lines = split(text, "\n")
+    let st = [[], [0], 0, 0]
+    let mut i = 0
+    while i < len(lines):
+        let si = lx_strip_indent(lines[i])
+        i = i + 1
+        st[3] = st[3] + 1
+        let content = si[0]
+        if content == "" or substr(content, 0, 1) == "#":
+            continue
+        if st[2] == 0:
+            let width = si[2]
+            if width > lx_last_indent(st):
+                push(st[1], width)
+                lx_emit(st, "indent", "", st[3], 1)
+            else:
+                while lx_last_indent(st) > width:
+                    pop(st[1])
+                    lx_emit(st, "dedent", "", st[3], 1)
+                if lx_last_indent(st) != width:
+                    die_parse("unindent does not match any outer indentation level", st[3], 1)
+        lx_line(st, content, si[1])
+    if st[2] > 0:
+        die_parse("unclosed `(` or `[` at end of file", st[3], 1)
+    let k = lx_last_kind(st)
+    if k != "" and k != "nl":
+        lx_emit(st, "nl", "", st[3], 1)
+    while lx_last_indent(st) > 0:
+        pop(st[1])
+        lx_emit(st, "dedent", "", st[3], 1)
+    lx_emit(st, "eof", "", st[3] + 1, 1)
+    return st[0]

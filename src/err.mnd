@@ -1,0 +1,32 @@
+def err_head(kind: str, code: str, msg: str) -> str:
+    if code == "":
+        return kind + ": " + msg
+    return kind + "[" + code + "]: " + msg
+
+def err_span(line: int, col: int) -> str:
+    let ln = str(line)
+    let mut pad = ""
+    while len(pad) < len(ln):
+        pad = pad + " "
+    let mut s = "  --> " + src_path + ":" + ln + ":" + str(col) + "\n"
+    s = s + pad + " |\n"
+    let text = ""
+    if line >= 1 and line <= len(src_lines):
+        text = src_lines[line - 1]
+    s = s + ln + " | " + text + "\n"
+    let mut caret = ""
+    while len(caret) < col - 1:
+        caret = caret + " "
+    return s + pad + " | " + caret + "^"
+
+def fmt_error(kind: str, code: str, msg: str, line: int, col: int) -> str:
+    return err_head(kind, code, msg) + "\n" + err_span(line, col)
+
+def die_parse(msg: str, line: int, col: int):
+    eprint(fmt_error("error", "", msg, line, col))
+    exit(1)
+
+def arg_word(n: int) -> str:
+    if n == 1:
+        return "1 argument"
+    return str(n) + " arguments"
