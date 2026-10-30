@@ -43,6 +43,12 @@ def p_expect(kind: str, val: str, what: str) -> list[str]:
     let t = p_peek()
     die_parse("expected " + what + ", found " + p_desc(t), t[2], t[3])
 
+def p_at2(off: int, kind: str, val: str) -> bool:
+    let t = p_toks[p_i + off]
+    if val == "":
+        return t[0] == kind
+    return t[0] == kind and t[1] == val
+
 def parse(toks: list[str]) -> list[str]:
     p_toks = toks
     p_i = 0
@@ -54,9 +60,42 @@ def parse(toks: list[str]) -> list[str]:
             break
         if p_at("kw", "def"):
             push(items, p_def())
+        elif p_at("kw", "struct"):
+            push(items, p_struct())
         else:
             push(items, p_stmt())
     return ["program", items, 1, 1]
+
+def p_struct() -> list[str]:
+    let t = p_next()
+    let name = p_expect("id", "", "a struct name")
+    p_expect("op", ":", "`:`")
+    if p_eat("nl", "") == nil or not p_at("indent", ""):
+        let tt = p_peek()
+        die_parse("expected an indented struct body, found " + p_desc(tt), tt[2], tt[3])
+    p_next()
+    let mut fields = []
+    let mut methods = []
+    while not p_at("dedent", "") and not p_at("eof", ""):
+        while p_at("nl", ""):
+            p_next()
+        if p_at("dedent", "") or p_at("eof", ""):
+            break
+        if p_at("kw", "def"):
+            push(methods, p_def())
+        else:
+            let fn = p_expect("id", "", "a field name")
+            p_expect("op", ":", "`:`")
+            let ft = p_type()
+            push(fields, [fn[1], ft, fn[2], fn[3]])
+            if not p_at("nl", "") and not p_at("dedent", "") and not p_at("eof", ""):
+                let tt = p_peek()
+                die_parse("expected end of line, found " + p_desc(tt), tt[2], tt[3])
+    if not p_at("dedent", ""):
+        let tt = p_peek()
+        die_parse("unexpected end of file: unclosed struct body", tt[2], tt[3])
+    p_next()
+    return ["struct", name[1], fields, methods, t[2], t[3]]
 
 def p_def() -> list[str]:
     p_next()
@@ -65,10 +104,16 @@ def p_def() -> list[str]:
     let mut params = []
     if not p_at("op", ")"):
         while true:
+            let mut is_mut = false
+            if p_at("kw", "mut"):
+                p_next()
+                is_mut = true
             let pn = p_expect("id", "", "a parameter name")
-            p_expect("op", ":", "`:`")
-            let pt = p_type()
-            push(params, [pn[1], pt, pn[2], pn[3]])
+            let pt = ""
+            if pn[1] != "self" or p_at("op", ":"):
+                p_expect("op", ":", "`:`")
+                pt = p_type()
+            push(params, [pn[1], pt, pn[2], pn[3], is_mut])
             if p_eat("op", ",") == nil:
                 break
     p_expect("op", ")", "`)`")
@@ -163,7 +208,7 @@ def p_assign_or_expr() -> list[str]:
     let e = p_expr()
     if p_at("op", "="):
         let op = p_next()
-        if e[0] != "var" and e[0] != "index":
+        if e[0] != "var" and e[0] != "index" and e[0] != "field":
             die_parse("invalid assignment target", e[len(e) - 2], e[len(e) - 1])
         let rhs = p_expr()
         return ["assign", e, rhs, op[2], op[3]]
@@ -284,6 +329,8 @@ def p_postfix() -> list[str]:
                     push(args, p_expr())
                     if p_eat("op", ",") == nil:
                         break
+                    if p_at("op", ")"):
+                        break
             p_expect("op", ")", "`)`")
             e = ["call", e, args, op[2], op[3]]
         elif p_at("op", "["):
@@ -291,6 +338,10 @@ def p_postfix() -> list[str]:
             let idx = p_expr()
             p_expect("op", "]", "`]`")
             e = ["index", e, idx, op[2], op[3]]
+        elif p_at("op", "."):
+            p_next()
+            let nm = p_expect("id", "", "a field or method name")
+            e = ["field", e, nm[1], nm[2], nm[3]]
         else:
             break
     return e
@@ -304,6 +355,8 @@ def p_atom() -> list[str]:
         p_next()
         return ["str", t[1], t[2], t[3]]
     if t[0] == "id":
+        if p_at2(1, "op", "{"):
+            return p_slit()
         p_next()
         return ["var", t[1], t[2], t[3]]
     if t[0] == "kw" and t[1] == "true":
@@ -328,6 +381,25 @@ def p_atom() -> list[str]:
                 push(items, p_expr())
                 if p_eat("op", ",") == nil:
                     break
+                if p_at("op", "]"):
+                    break
         p_expect("op", "]", "`]`")
         return ["list", items, t[2], t[3]]
     die_parse("expected an expression, found " + p_desc(t), t[2], t[3])
+
+def p_slit() -> list[str]:
+    let name = p_next()
+    p_expect("op", "{", "`{`")
+    let mut fields = []
+    if not p_at("op", "}"):
+        while true:
+            let fn = p_expect("id", "", "a field name")
+            p_expect("op", ":", "`:`")
+            let v = p_expr()
+            push(fields, [fn[1], v, fn[2], fn[3]])
+            if p_eat("op", ",") == nil:
+                break
+            if p_at("op", "}"):
+                break
+    p_expect("op", "}", "`}`")
+    return ["slit", name[1], fields, name[2], name[3]]
