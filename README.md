@@ -11,8 +11,8 @@
 [English](README_EN.md) | Русский
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.1%20bootstrap-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-17%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.2%20structs-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-30%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -61,6 +61,31 @@ fib(10) = 55
 
 Даже ASCII-мандельброт пишется на целых числах — [examples/mandel.mnd](examples/mandel.mnd).
 
+Структуры и методы — с мутационной дисциплиной Rust:
+
+```python
+# examples/structs.mnd
+struct Point:
+    x: int
+    y: int
+
+    def dot(self, other: Point) -> int:
+        return self.x * other.x + self.y * other.y
+
+    def move_by(mut self, dx: int, dy: int):
+        self.x = self.x + dx
+        self.y = self.y + dy
+
+def main():
+    let mut a = Point { x: 1, y: 2 }
+    let b = Point { x: 3, y: 4 }
+    a.move_by(10, 20)      # ок: a объявлен let mut
+    print(a.dot(b))
+```
+
+`mut self` играет роль Rust `&mut self`: вызов такого метода на неизменяемой
+переменной — ошибка компиляции (`E0596`).
+
 ## Компилятор не пропустит
 
 `./bin/mandela check` ловит ошибки до запуска и оформляет их как rustc:
@@ -83,7 +108,7 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
   |           ^
 ```
 
-Коды ошибок совпадают с rustc там, где смысл совпадает: `E0308`, `E0369`, `E0384`, `E0061`, `E0425`, `E0428`, `E0277`, `E0268`, `E0267`, `E0572`, `E0282`, `E0412`, `E0594`, `E0618`. Полный список — в [спецификации](spec/SPEC.md).
+Коды ошибок совпадают с rustc там, где смысл совпадает: `E0308`, `E0369`, `E0384`, `E0061`, `E0425`, `E0428`, `E0277`, `E0268`, `E0267`, `E0572`, `E0282`, `E0412`, `E0594`, `E0618`, плюс структурные `E0062`, `E0063`, `E0124`, `E0424`, `E0560`, `E0592`, `E0596`, `E0599`, `E0609`. Полный список — в [спецификации](spec/SPEC.md).
 
 ## Архитектура: компилятор на самом себе
 
@@ -119,11 +144,12 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 ./bin/mandela ast file.mnd             # дамп AST в s-выражениях (отладка)
 ```
 
-## Возможности v0.1
+## Возможности v0.2
 
 - Статическая типизация с выводом типов: `let x = 5`, `let name: str = "..."`, `list[int]`
 - Неизменяемость по умолчанию: `let` против `let mut`
 - Целые числа (семантика деления C), строки, `bool`, `nil`, списки
+- Структуры с полями и методами, `self`, дисциплина `mut self`
 - `if/elif/else`, `while`, `for x in range(...)`, `for x in список`, `break`, `continue`
 - Функции с обязательными аннотациями параметров, рекурсия, хоистинг функций
 - Встроенные: `print len str int chr ord push pop split substr read_file write_file args fatal exit range`
@@ -133,15 +159,16 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 
 | Версия | Что планируется |
 | --- | --- |
-| v0.2 | Кодогенерация в C и нативные бинарники, уход от бутстрап-движка |
-| v0.3 | `unsafe`-блоки, `ptr<T>`, ручное управление памятью |
-| v0.4 | Числа с плавающей точкой, структуры, методы |
-| v0.5 | Модули вместо линейных скриптов, менеджер пакетов |
+| v0.2 | Структуры и методы — **в этом релизе** |
+| v0.3 | Кодогенерация в C и нативные бинарники, уход от бутстрап-движка |
+| v0.4 | `unsafe`-блоки, `ptr<T>`, ручное управление памятью |
+| v0.5 | Числа с плавающей точкой |
+| v0.6 | Модули вместо линейных скриптов, менеджер пакетов |
 
 ## Разработка
 
 ```bash
-make test        # 17 тестов: позитивные и негативные
+make test        # 30 тестов: позитивные и негативные
 ```
 
 Структура репозитория:
@@ -150,7 +177,7 @@ make test        # 17 тестов: позитивные и негативные
 bin/mandela          CLI
 bootstrap/mandela.py бутстрап-движок (временно)
 src/*.mnd            компилятор, написанный на Mandela
-spec/SPEC.md         спецификация языка v0.1
+spec/SPEC.md         спецификация языка v0.2
 examples/            примеры программ
 tests/               тесты (позитивные и негативные)
 ```

@@ -1,4 +1,4 @@
-# The Mandela Language Specification — v0.1.0
+# The Mandela Language Specification — v0.2.0
 
 Status: draft, implemented by the self-hosted compiler in `src/`.
 
@@ -24,14 +24,14 @@ block comments and no docstrings in v0.1.
 Identifiers match `[A-Za-z_][A-Za-z0-9_]*`. The reserved words are:
 
 ```text
-def  return  if  elif  else  while  for  in  let  mut
+def  return  if  elif  else  while  for  in  let  mut  struct
 true  false  nil  and  or  not  break  continue
 ```
 
 ### 1.4 Operators and punctuation
 
 ```text
-+  -  *  /  %  =  ==  !=  <  <=  >  >=  ->  (  )  [  ]  ,  :
++  -  *  /  %  =  ==  !=  <  <=  >  >=  ->  (  )  [  ]  {  }  ,  :  .
 ```
 
 ### 1.5 Literals
@@ -49,6 +49,7 @@ true  false  nil  and  or  not  break  continue
 | `bool` | `true` or `false`. Conditions must be `bool`; there is no truthiness coercion. |
 | `nil` | The unit-ish value `nil`, returned by functions without `->`. |
 | `list[T]` | Growable array of `T`. Empty literals require an annotation: `let a: list[int] = []`. |
+| `struct` | Nominal record type defined in source; see §5. |
 
 There is no implicit conversion between any two types.
 
@@ -80,7 +81,50 @@ def add(a: int, b: int) -> int:
 - Top-level `let` declarations are globals; functions may read and (if declared
   `mut`) assign them.
 
-## 5. Statements
+## 5. Structs
+
+A struct is a nominal record type with named fields and methods:
+
+```text
+struct Point:
+    x: int
+    y: int
+
+    def dot(self, other: Point) -> int:
+        return self.x * other.x + self.y * other.y
+
+    def move_by(mut self, dx: int, dy: int):
+        self.x = self.x + dx
+        self.y = self.y + dy
+```
+
+- Structs are declared only at top level. Redefining a name is `E0428`.
+- Fields are `name: Type` lines; a duplicate field is `E0124`.
+- Values are built with a literal: `Point { x: 1, y: 2 }`. All fields must be
+  given exactly once: missing is `E0063`, unknown is `E0560`, repeated is
+  `E0062`, wrong value type is `E0308`.
+- Struct types compose with lists: `list[Point]`.
+- `==` / `!=` compare two values of the same struct field-by-field.
+- Field access is `value.field` (`E0609` if there is no such field).
+- Field assignment `value.field = e` requires the binding to be `let mut`,
+  otherwise `E0384`.
+
+### 5.1 Methods
+
+A `def` inside a struct body is a method. Its first parameter must be `self`
+(`E0424` otherwise); `self` has the struct's type.
+
+- Methods are called as `value.method(args)`; the checker reports `E0599` if
+  no method with that name exists on the struct (or on the type, for
+  non-struct receivers).
+- A method that mutates `self` declares `mut self` (like Rust's `&mut self`).
+  Inside it, assigning to `self.field` is allowed.
+- Calling a `mut self` method on an immutable binding is `E0596`; a non-`mut`
+  method cannot assign to `self.field` (`E0384`).
+- Methods may call other methods through `self`; they may also call ordinary
+  functions. Ordinary functions cannot be called as methods and vice versa.
+
+## 6. Statements
 
 ```text
 if cond:
@@ -104,7 +148,7 @@ for item in list_value:  # elements
 - `return` at top level is `E0572`.
 - Single-line suites are allowed: `if x == 1: print("one")`.
 
-## 6. Expressions
+## 7. Expressions
 
 Precedence, from lowest to highest:
 
@@ -117,8 +161,8 @@ Precedence, from lowest to highest:
 | 5 | `+ -` | left |
 | 6 | `* / %` | left |
 | 7 | unary `-` | prefix |
-| 8 | call `f(x)` | postfix |
-| 9 | index `a[i]` | postfix |
+| 8 | call `f(x)`, method `v.m(x)` | postfix |
+| 9 | index `a[i]`, field `v.f` | postfix |
 
 Semantics:
 
@@ -130,8 +174,10 @@ Semantics:
   `panic: index out of bounds: the len is 3 but the index is 5`.
 - Strings are immutable: `s[0] = "x"` is `E0594`.
 - List literals `[1, 2, 3]` must have one element type (`E0308`).
+- Trailing commas are allowed in call arguments, list literals and struct
+  literals.
 
-## 7. Built-ins
+## 8. Built-ins
 
 | Function | Signature | Notes |
 | --- | --- | --- |
@@ -152,7 +198,9 @@ Semantics:
 | `exit(code)` | int -> never | Terminates with `code`. |
 | `range(...)` | int -> iterable | Only in `for`. |
 
-## 8. Panics
+`print` / `str` format a struct value as `Point { x: 1, y: 2 }`.
+
+## 9. Panics
 
 Runtime contract violations abort the process with exit code `101` (like Rust)
 and a message on stderr:
@@ -163,7 +211,7 @@ panic: attempt to divide by zero
 panic: invalid digit found in string
 ```
 
-## 9. The strict compiler
+## 10. The strict compiler
 
 `mandela check` performs full static checking and reports every error in one
 pass, rustc-style, then exits with code 1 if any error was found. Warning
@@ -172,18 +220,27 @@ pass, rustc-style, then exits with code 1 if any error was found. Warning
 | Code | Meaning |
 | --- | --- |
 | E0061 | Wrong number of arguments |
+| E0062 | Struct field specified more than once in a literal |
+| E0063 | Missing field(s) in a struct initializer |
+| E0124 | Struct field declared more than once |
 | E0267 | `continue` outside of a loop |
 | E0268 | `break` outside of a loop |
 | E0277 | Type is not an iterator / not indexable |
 | E0282 | Type annotations needed (empty list literal) |
 | E0308 | Mismatched types |
 | E0369 | Operator not applicable to these types |
-| E0384 | Assignment to immutable variable |
+| E0384 | Assignment to immutable variable (including `v.f` and `self.f`) |
 | E0412 | Unknown type name |
+| E0424 | `self` parameter misplaced (missing in a method, or in a plain function) |
 | E0425 | Cannot find value or function in this scope |
 | E0428 | Name defined multiple times |
+| E0560 | Struct has no field named (in a literal) |
 | E0572 | `return` outside of a function |
+| E0592 | Duplicate method definition |
 | E0594 | Assignment to a string index |
+| E0596 | `mut self` method called on an immutable binding |
+| E0599 | No method named found for type/struct |
+| E0609 | No field named on type |
 | E0618 | Call of a non-function value |
 
 Syntax errors carry no code, mirroring rustc:
@@ -196,7 +253,7 @@ error: expected `(`, found identifier `x`
   |         ^
 ```
 
-## 10. Execution model
+## 11. Execution model
 
 The reference pipeline is:
 
