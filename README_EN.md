@@ -46,8 +46,8 @@ cd mandela
 ./hello
 ```
 
-You only need `python3` (the bootstrap engine). For `build` you additionally
-need any system compiler (`cc`, `gcc`, `clang`).
+No extra dependencies: the bootstrap engine ships with the repository. For
+`build` you additionally need any system compiler (`cc`, `gcc`, `clang`).
 
 ## Example
 
