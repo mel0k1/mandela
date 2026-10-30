@@ -130,6 +130,13 @@ def p_type() -> str:
         let inner = p_type()
         p_expect("op", "]", "`]`")
         return "list[" + inner + "]"
+    if t[1] == "dict":
+        p_expect("op", "[", "`[` after `dict`")
+        let k = p_type()
+        p_expect("op", ",", "`,`")
+        let v = p_type()
+        p_expect("op", "]", "`]`")
+        return "dict[" + k + "," + v + "]"
     return t[1]
 
 def p_block() -> list[str]:
@@ -373,6 +380,8 @@ def p_atom() -> list[str]:
         let e = p_expr()
         p_expect("op", ")", "`)`")
         return e
+    if t[0] == "op" and t[1] == "{":
+        return p_dictlit()
     if t[0] == "op" and t[1] == "[":
         p_next()
         let mut items = []
@@ -386,6 +395,22 @@ def p_atom() -> list[str]:
         p_expect("op", "]", "`]`")
         return ["list", items, t[2], t[3]]
     die_parse("expected an expression, found " + p_desc(t), t[2], t[3])
+
+def p_dictlit() -> list[str]:
+    let t = p_next()
+    let mut pairs = []
+    if not p_at("op", "}"):
+        while true:
+            let k = p_expr()
+            p_expect("op", ":", "`:`")
+            let v = p_expr()
+            push(pairs, [k, v, k[len(k) - 2], k[len(k) - 1]])
+            if p_eat("op", ",") == nil:
+                break
+            if p_at("op", "}"):
+                break
+    p_expect("op", "}", "`}`")
+    return ["dict", pairs, t[2], t[3]]
 
 def p_slit() -> list[str]:
     let name = p_next()
