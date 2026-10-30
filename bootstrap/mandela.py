@@ -43,13 +43,31 @@ class ContinueEx(Exception):
     pass
 
 
+class StructDef:
+    __slots__ = ("name", "fields", "methods")
+
+    def __init__(self, name, fields, methods):
+        self.name = name
+        self.fields = fields
+        self.methods = methods
+
+
+class MStruct:
+    __slots__ = ("sd", "vals")
+
+    def __init__(self, sd, vals):
+        self.sd = sd
+        self.vals = vals
+
+
 KEYWORDS = {
     "def", "return", "if", "elif", "else", "while", "for", "in", "let",
     "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
+    "struct",
 }
 
 OPS2 = ("->", "==", "!=", "<=", ">=")
-OPS1 = set("+-*/%=<>()[],:")
+OPS1 = set("+-*/%=<>()[],:.{}")
 
 
 def strip_indent(raw):
@@ -163,9 +181,9 @@ def tokenize(src):
                 continue
             if c in OPS1:
                 toks.append(("op", c, ln, col))
-                if c in "([":
+                if c in "([{":
                     depth += 1
-                elif c in ")]":
+                elif c in ")]}":
                     if depth > 0:
                         depth -= 1
                 j += 1
@@ -240,9 +258,46 @@ class Parser:
                 break
             if self.at("kw", "def"):
                 items.append(self.parse_def())
+            elif self.at("kw", "struct"):
+                items.append(self.parse_struct())
             else:
                 items.append(self.parse_stmt())
         return ["program", items, 1, 1]
+
+    def parse_struct(self):
+        t = self.next()
+        name = self.expect("id", None, "struct name")
+        self.expect("op", ":", "`:`")
+        self.expect("nl", None, "end of line")
+        if not self.at("indent"):
+            tok = self.peek()
+            raise CompileError("expected an indented struct body, found %s"
+                               % describe(tok), tok[2], tok[3])
+        self.next()
+        fields = []
+        methods = []
+        while not self.at("dedent") and not self.at("eof"):
+            while self.at("nl"):
+                self.next()
+            if self.at("dedent") or self.at("eof"):
+                break
+            if self.at("kw", "def"):
+                methods.append(self.parse_def())
+            else:
+                fn = self.expect("id", None, "a field name")
+                self.expect("op", ":", "`:`")
+                ft = self.parse_type()
+                fields.append([fn[1], ft, fn[2], fn[3]])
+                if not (self.at("nl") or self.at("dedent") or self.at("eof")):
+                    tok = self.peek()
+                    raise CompileError("expected end of line, found %s"
+                                       % describe(tok), tok[2], tok[3])
+        if not self.at("dedent"):
+            tok = self.peek()
+            raise CompileError("unexpected end of file: unclosed struct body",
+                               tok[2], tok[3])
+        self.next()
+        return ["struct", name[1], fields, methods, t[2], t[3]]
 
     def parse_def(self):
         self.next()
@@ -251,9 +306,13 @@ class Parser:
         params = []
         if not self.at("op", ")"):
             while True:
+                if self.at("kw", "mut"):
+                    self.next()
                 pn = self.expect("id", None, "parameter name")
-                self.expect("op", ":", "`:`")
-                pt = self.parse_type()
+                pt = ""
+                if pn[1] != "self" or self.at("op", ":"):
+                    self.expect("op", ":", "`:`")
+                    pt = self.parse_type()
                 params.append([pn[1], pt, pn[2], pn[3]])
                 if not self.eat("op", ","):
                     break
@@ -349,7 +408,7 @@ class Parser:
         e = self.parse_expr()
         if self.at("op", "="):
             op = self.next()
-            if e[0] not in ("var", "index"):
+            if e[0] not in ("var", "index", "field"):
                 raise CompileError("invalid assignment target", e[-2], e[-1])
             rhs = self.parse_expr()
             return ["assign", e, rhs, op[2], op[3]]
@@ -454,6 +513,8 @@ class Parser:
                         args.append(self.parse_expr())
                         if not self.eat("op", ","):
                             break
+                        if self.at("op", ")"):
+                            break
                 self.expect("op", ")", "`)`")
                 e = ["call", e, args, op[2], op[3]]
             elif self.at("op", "["):
@@ -461,6 +522,10 @@ class Parser:
                 idx = self.parse_expr()
                 self.expect("op", "]", "`]`")
                 e = ["index", e, idx, op[2], op[3]]
+            elif self.at("op", "."):
+                self.next()
+                nm = self.expect("id", None, "a field or method name")
+                e = ["field", e, nm[1], nm[2], nm[3]]
             else:
                 break
         return e
@@ -474,6 +539,9 @@ class Parser:
             self.next()
             return ["str", t[1], t[2], t[3]]
         if t[0] == "id":
+            nxt = self.toks[self.i + 1]
+            if nxt[0] == "op" and nxt[1] == "{":
+                return self.parse_slit()
             self.next()
             return ["var", t[1], t[2], t[3]]
         if t[0] == "kw":
@@ -499,9 +567,28 @@ class Parser:
                     items.append(self.parse_expr())
                     if not self.eat("op", ","):
                         break
+                    if self.at("op", "]"):
+                        break
             self.expect("op", "]", "`]`")
             return ["list", items, t[2], t[3]]
         raise CompileError("expected an expression, found %s" % describe(t), t[2], t[3])
+
+    def parse_slit(self):
+        name = self.next()
+        self.next()
+        fields = []
+        if not self.at("op", "}"):
+            while True:
+                fn = self.expect("id", None, "a field name")
+                self.expect("op", ":", "`:`")
+                v = self.parse_expr()
+                fields.append([fn[1], v, fn[2], fn[3]])
+                if not self.eat("op", ","):
+                    break
+                if self.at("op", "}"):
+                    break
+        self.expect("op", "}", "`}`")
+        return ["slit", name[1], fields, name[2], name[3]]
 
 
 class Env:
@@ -523,6 +610,8 @@ def type_name(v):
         return "str"
     if isinstance(v, list):
         return "list"
+    if isinstance(v, MStruct):
+        return v.sd.name
     return type(v).__name__
 
 
@@ -547,6 +636,12 @@ def ml_eq(a, b):
         if not (isinstance(a, list) and isinstance(b, list)):
             return False
         return len(a) == len(b) and all(ml_eq(x, y) for x, y in zip(a, b))
+    if isinstance(a, MStruct) or isinstance(b, MStruct):
+        if not (isinstance(a, MStruct) and isinstance(b, MStruct)):
+            return False
+        if a.sd.name != b.sd.name:
+            return False
+        return all(ml_eq(a.vals[f[0]], b.vals[f[0]]) for f in a.sd.fields)
     return a == b
 
 
@@ -580,6 +675,10 @@ def format_value(v, nested=False):
         return v
     if isinstance(v, list):
         return "[" + ", ".join(format_value(x, True) for x in v) + "]"
+    if isinstance(v, MStruct):
+        parts = ["%s: %s" % (f[0], format_value(v.vals[f[0]], True))
+                 for f in v.sd.fields]
+        return "%s { %s }" % (v.sd.name, ", ".join(parts))
     return str(v)
 
 
@@ -761,14 +860,24 @@ class Interp:
     def __init__(self, argv):
         self.genv = Env(None)
         self.argv = argv
+        self.structs = {}
 
     def run(self, program):
+        for item in program[1]:
+            if item[0] == "struct":
+                self.decl_struct(item)
         for item in program[1]:
             if item[0] == "def":
                 self.genv.vars[item[1]] = (item[2], item[4])
         for item in program[1]:
-            if item[0] != "def":
+            if item[0] not in ("def", "struct"):
                 self.exec_stmt(item, self.genv)
+
+    def decl_struct(self, item):
+        methods = {}
+        for m in item[3]:
+            methods[m[1]] = (m[2], m[4])
+        self.structs[item[1]] = StructDef(item[1], item[2], methods)
 
     def exec_block(self, stmts, env):
         for s in stmts:
@@ -839,6 +948,17 @@ class Interp:
                     return
                 scope = scope.parent
             raise Panic("undefined variable '%s'" % name)
+        if target[0] == "field":
+            base = self.eval(target[1], env)
+            val = self.eval(node[2], env)
+            if not isinstance(base, MStruct):
+                raise Panic("no field `%s` on type `%s`"
+                            % (target[2], type_name(base)))
+            if target[2] not in base.vals:
+                raise Panic("no field `%s` on type `%s`"
+                            % (target[2], base.sd.name))
+            base.vals[target[2]] = val
+            return
         base = self.eval(target[1], env)
         idx = require_index(self.eval(target[2], env))
         val = self.eval(node[2], env)
@@ -865,6 +985,10 @@ class Interp:
             raise Panic("undefined variable '%s'" % name)
         if tag == "list":
             return [self.eval(x, env) for x in node[1]]
+        if tag == "slit":
+            return self.eval_slit(node, env)
+        if tag == "field":
+            return self.eval_field(node, env)
         if tag == "call":
             return self.eval_call(node, env)
         if tag == "index":
@@ -889,8 +1013,39 @@ class Interp:
             return not truthy(v)
         raise Panic("interpreter error: unknown expression '%s'" % tag)
 
+    def eval_slit(self, node, env):
+        name = node[1]
+        sd = self.structs.get(name)
+        if sd is None:
+            raise Panic("undefined struct '%s'" % name)
+        vals = {}
+        for f in node[2]:
+            if f[0] in vals:
+                raise Panic("field `%s` specified more than once" % f[0])
+            vals[f[0]] = self.eval(f[1], env)
+        for f in sd.fields:
+            if f[0] not in vals:
+                raise Panic("missing field `%s` in initializer for `%s`"
+                            % (f[0], name))
+        known = set(f[0] for f in sd.fields)
+        for k in vals:
+            if k not in known:
+                raise Panic("struct `%s` has no field named `%s`" % (name, k))
+        return MStruct(sd, vals)
+
+    def eval_field(self, node, env):
+        base = self.eval(node[1], env)
+        name = node[2]
+        if isinstance(base, MStruct):
+            if name in base.vals:
+                return base.vals[name]
+            raise Panic("no field `%s` on type `%s`" % (name, base.sd.name))
+        raise Panic("no field `%s` on type `%s`" % (name, type_name(base)))
+
     def eval_call(self, node, env):
         fn = node[1]
+        if fn[0] == "field":
+            return self.eval_method(node, env)
         if fn[0] != "var":
             raise Panic("cannot call a non-function expression")
         name = fn[1]
@@ -907,6 +1062,33 @@ class Interp:
                         % (name, len(params), len(args)))
         fenv = Env(self.genv)
         for p, a in zip(params, args):
+            fenv.vars[p[0]] = a
+        try:
+            self.exec_block(body, fenv)
+        except ReturnEx as r:
+            return r.value
+        return None
+
+    def eval_method(self, node, env):
+        fnode = node[1]
+        base = self.eval(fnode[1], env)
+        mname = fnode[2]
+        if not isinstance(base, MStruct):
+            raise Panic("no method `%s` on type `%s`" % (mname, type_name(base)))
+        m = base.sd.methods.get(mname)
+        if m is None:
+            raise Panic("no method `%s` on struct `%s`" % (mname, base.sd.name))
+        params, body = m
+        if not params:
+            raise Panic("method `%s` has no `self` parameter" % mname)
+        args = [self.eval(a, env) for a in node[2]]
+        rest = params[1:]
+        if len(args) != len(rest):
+            raise Panic("method `%s` takes %d argument(s) but %d were given"
+                        % (mname, len(rest), len(args)))
+        fenv = Env(self.genv)
+        fenv.vars[params[0][0]] = base
+        for p, a in zip(rest, args):
             fenv.vars[p[0]] = a
         try:
             self.exec_block(body, fenv)
