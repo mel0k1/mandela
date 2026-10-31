@@ -1,4 +1,4 @@
-# The Mandela Language Specification — v0.5.0
+# The Mandela Language Specification — v0.7.0
 
 Status: draft, implemented by the self-hosted compiler in `src/` and the code
 generator in `bootstrap/codegen.py`.
@@ -19,7 +19,7 @@ Blank lines and comment-only lines carry no indentation significance.
 ### 1.2 Comments
 
 A comment starts with `#` and extends to the end of the line. There are no
-block comments and no docstrings in v0.5.
+block comments and no docstrings.
 
 ### 1.3 Identifiers and keywords
 
@@ -28,6 +28,7 @@ Identifiers match `[A-Za-z_][A-Za-z0-9_]*`. The reserved words are:
 ```text
 def  return  if  elif  else  while  for  in  let  mut  struct
 true  false  nil  and  or  not  break  continue  unsafe
+import  from  as
 ```
 
 ### 1.4 Operators and punctuation
@@ -51,14 +52,14 @@ true  false  nil  and  or  not  break  continue  unsafe
 | Type | Description |
 | --- | --- |
 | `int` | Signed 64-bit integer. Division `/` and remainder `%` truncate toward zero. Overflow wraps in two's complement. |
-| `f64` | IEEE 754 double-precision float; see §11. |
+| `f64` | IEEE 754 double-precision float; see §12. |
 | `str` | Immutable string. Indexing yields a one-character string. In native builds strings are byte sequences, so string offsets and lengths are reliable for ASCII input in v0.5. |
 | `bool` | `true` or `false`. Conditions must be `bool`; there is no truthiness coercion. |
 | `nil` | The unit-ish value `nil`, returned by functions without `->`. |
 | `list[T]` | Growable array of `T`. Empty literals require an annotation: `let a: list[int] = []`. |
-| `dict[K, V]` | Insertion-ordered map from `K` keys to `V` values; see §6. |
-| `ptr[T]` | Raw pointer to `T` slots; see §8. `nil` is the null pointer. |
-| `Arena` | A memory region; pointers are allocated from it and released together; see §8. |
+| `dict[K, V]` | Insertion-ordered map from `K` keys to `V` values; see §7. |
+| `ptr[T]` | Raw pointer to `T` slots; see §9. `nil` is the null pointer. |
+| `Arena` | A memory region; pointers are allocated from it and released together; see §9. |
 | `struct` | Nominal record type defined in source; see §5. |
 
 There is no implicit conversion between any two types. In particular an
@@ -137,7 +138,56 @@ A `def` inside a struct body is a method. Its first parameter must be `self`
 - Methods may call other methods through `self`; they may also call ordinary
   functions. Ordinary functions cannot be called as methods and vice versa.
 
-## 6. Dictionaries
+## 6. Modules and packages
+
+Every `.mnd` source file is a module. A module's top-level `def`, `struct` and
+`let` declarations are private to it; other modules see only what they import.
+
+```text
+import parser                  # binds `parser`
+import util.helper             # binds `util`; use util.helper.f(...)
+import util.helper as h        # binds `h` = module util.helper
+from parser import parse       # binds `parse` into this module
+from util.nums import double as d2
+```
+
+`import` is allowed only at the top level of a module; inside a function it is
+a syntax error. Modules are executed at import time: their top-level `let`
+initializers and statements run once, on first import, and the resulting
+values are shared by every later importer.
+
+Resolution. A dotted path `a.b.c` maps to file `a/b/c.mnd` or to package
+`a/b/c/` (a directory with `__init__.mnd`). Intermediate components are
+directories; a directory without `__init__.mnd` is a namespace package and
+contributes no declarations. The search order for every import is: the
+directory of the importing file, then the directory of the entry program.
+The first base directory under which the leaf resolves wins; all components
+resolve under that same base.
+
+Names. `import a.b` binds the top package `a`, matching Python; the submodule
+is reached as `a.b`. An alias (`as`) binds the imported module itself.
+`from a.b import name` binds `name` directly; functions keep their signatures,
+`let` values are imported read-only, and structs are imported by name — a
+struct literal `Point{...}` requires the struct to be imported this way, since
+qualified type names (`a.b.Point`) are not supported in v0.7. Importing under
+an alias binds the alias: `from geom import Point as P` allows `P{...}`.
+
+Modules are namespaces, not values: a module name cannot be assigned, passed
+or called (`E0609`, `E0618`). Struct names must be unique across all modules
+of a program; two modules defining the same struct name is `E0428`.
+
+Diagnostics:
+
+| Code | Meaning |
+| --- | --- |
+| E0252 | The name is defined multiple times (import collides with an existing binding) |
+| E0432 | Cannot find module / circular import |
+| E0433 | Could not find `name` in module |
+
+An import that is never used produces a warning (`unused import`), which does
+not fail the build. Prefixing the binding with `_` suppresses it.
+
+## 7. Dictionaries
 
 `dict[K, V]` is an insertion-ordered map. `K` is `str` or `int`; `V` is any
 type.
@@ -171,7 +221,7 @@ let by_id: dict[int, str] = {1: "one", 2: "two"}
 | `d.has(k)` | K -> bool | `true` when the key is present. |
 | `d.remove(k)` | K -> bool | Removes and returns `true` on success; requires `let mut` (`E0596`). |
 
-## 7. Methods on built-in types
+## 8. Methods on built-in types
 
 String values have built-in methods:
 
@@ -192,7 +242,7 @@ Wrong argument types are `E0308`, wrong arity is `E0061`. The standalone
 `split(s, sep)` and `substr(s, start, len)` built-ins remain and behave
 identically.
 
-## 8. Pointers, arenas and `unsafe`
+## 9. Pointers, arenas and `unsafe`
 
 Mandela has no garbage collector. Bulk memory is managed explicitly with
 region-based allocation: pointers are carved out of arenas and released
@@ -266,7 +316,7 @@ panics deterministically instead:
 | `panic: use of a freed arena` | `arena_alloc` after `arena_free`. |
 | `panic: ptr length must not be negative` | Negative `alloc`/`arena_alloc` length. |
 
-## 9. Statements
+## 10. Statements
 
 ```text
 if cond:
@@ -291,7 +341,7 @@ for k in dict_value:     # keys in insertion order
 - `return` at top level is `E0572`.
 - Single-line suites are allowed: `if x == 1: print("one")`.
 
-## 10. Expressions
+## 11. Expressions
 
 Precedence, from lowest to highest:
 
@@ -310,9 +360,9 @@ Precedence, from lowest to highest:
 Semantics:
 
 - `+` adds integers or floats, or concatenates strings; mixing is `E0369`.
-- `ptr[T] + int` and `ptr[T] - int` shift the view by that many slots (§8);
+- `ptr[T] + int` and `ptr[T] - int` shift the view by that many slots (§9);
   any other pointer arithmetic combination is `E0369`.
-- On floats `/` and `%` never panic: see §11. On integers they truncate
+- On floats `/` and `%` never panic: see §12. On integers they truncate
   toward zero and panic on a zero divisor.
 - `==`/`!=` require the same type on both sides (`E0308`); lists, dicts and
   structs are compared by contents.
@@ -324,7 +374,7 @@ Semantics:
 - Trailing commas are allowed in call arguments, list literals, dict literals
   and struct literals.
 
-## 11. Floating point
+## 12. Floating point
 
 `f64` is an IEEE 754 binary64 double. Literals always contain a fractional
 part (`2.0`, `0.5`) and may carry an exponent (`1.5e-3`, `6.02e23`); unary
@@ -378,7 +428,7 @@ the same double, always showing a fractional part or an exponent:
 Fixed notation holds for magnitudes below `1e16`, scientific notation from
 `1e16` up and below `1e-4`. Negative zero prints as `-0.0`.
 
-## 12. Built-ins
+## 13. Built-ins
 
 | Function | Signature | Notes |
 | --- | --- | --- |
@@ -386,7 +436,7 @@ Fixed notation holds for magnitudes below `1e16`, scientific notation from
 | `len(x)` | str/list[T]/dict[K, V] -> int | |
 | `str(x)` | any -> str | Debug formatting. |
 | `int(x)` | str/int/f64 -> int | Strict parse; panics on invalid digits. `f64` truncates toward zero. |
-| `f64(x)` | str/int/f64 -> f64 | Conversion or strict parse; see §11. |
+| `f64(x)` | str/int/f64 -> f64 | Conversion or strict parse; see §12. |
 | `chr(i)` | int -> str | Panics outside Unicode scalar range. |
 | `ord(s)` | str -> int | Requires a one-character string. |
 | `push(l, v)` | list[T], T -> list[T] | Appends in place. |
@@ -404,12 +454,12 @@ Fixed notation holds for magnitudes below `1e16`, scientific notation from
 | `round(x)` | f64 -> f64 | Half away from zero. |
 | `pow(a, b)` | f64, f64 -> f64 | C `pow`. |
 | `range(...)` | int -> iterable | Only in `for`. |
-| `alloc(n, fill)` | int, T -> ptr[T] | See §8. |
-| `arena_new()` | -> Arena | See §8. |
-| `arena_alloc(a, n, fill)` | Arena, int, T -> ptr[T] | See §8. |
+| `alloc(n, fill)` | int, T -> ptr[T] | See §9. |
+| `arena_new()` | -> Arena | See §9. |
+| `arena_alloc(a, n, fill)` | Arena, int, T -> ptr[T] | See §9. |
 | `arena_free(a)` | Arena -> int | [unsafe] See §8. |
-| `ptr_len(p)` | ptr[T] -> int | See §8. |
-| `is_null(p)` | ptr[T] -> bool | See §8. |
+| `ptr_len(p)` | ptr[T] -> int | See §9. |
+| `is_null(p)` | ptr[T] -> bool | See §9. |
 
 `print` / `str` format values as:
 
@@ -426,7 +476,7 @@ Point { x: 1, y: 2 }
 <arena>
 ```
 
-## 13. Panics
+## 14. Panics
 
 Runtime contract violations abort the process with exit code `101` and a
 message on stderr:
@@ -442,7 +492,7 @@ panic: no key `x` in dict
 panic: method `bump` takes 1 argument(s) but 2 were given
 ```
 
-## 14. The strict compiler
+## 15. The strict compiler
 
 `mandela check` performs full static checking and reports every error in one
 pass — error code, file, line, column and a caret under the offending token —
@@ -456,6 +506,7 @@ functions that never return) do not fail the build.
 | E0063 | Missing field(s) in a struct initializer |
 | E0124 | Struct field declared more than once |
 | E0133 | Unsafe operation (pointer indexing, `arena_free`) outside an `unsafe` block |
+| E0252 | The name `x` is defined multiple times (import binding collision) |
 | E0267 | `continue` outside of a loop |
 | E0268 | `break` outside of a loop |
 | E0277 | Type is not an iterator / not indexable |
@@ -466,6 +517,8 @@ functions that never return) do not fail the build.
 | E0412 | Unknown type name |
 | E0424 | `self` parameter misplaced (missing in a method, or in a plain function) |
 | E0425 | Cannot find value or function in this scope |
+| E0432 | Cannot find module / circular import |
+| E0433 | Could not find `name` in module |
 | E0428 | Name defined multiple times |
 | E0560 | Struct has no field named (in a literal) |
 | E0572 | `return` outside of a function |
@@ -486,12 +539,14 @@ error: expected `(`, found identifier `x`
   |         ^
 ```
 
-## 15. The toolchain and code generation
+## 16. The toolchain and code generation
 
 `mandela build program.mnd` produces a native executable:
 
-1. **Check** — the self-hosted compiler front-end (`src/*.mnd`: lexer, parser,
-   checker) validates the program.
+1. **Check** — the self-hosted compiler front-end (`src/`: `lexer.mnd`,
+   `parser.mnd`, `checker.mnd`, wired together by `main.mnd` over the module
+   system) validates the program. Import graphs are resolved by the checker;
+   every imported module is checked once.
 2. **Lower** — `bootstrap/codegen.py` lowers the AST to a single self-contained
    C source file. The runtime is a small set of C structs: a tagged
    `MndValue`, `MndStr`, `MndList`, `MndStruct` and an open-addressed
@@ -504,6 +559,11 @@ error: expected `(`, found identifier `x`
 writes the assembly listing, `--emit bin` (default) writes the executable.
 `mandela run` executes programs on the bootstrap interpreter after the same
 check; the two backends are kept output-identical by the test suite.
+
+Modules in v0.7 are a front-end and interpreter feature: `mandela run` and
+`mandela check` resolve and verify the full import graph, while the C and
+native backends still compile a single file and reject programs with imports
+with a clear error. Multi-unit code generation is planned for v0.8.
 
 Memory model in v0.5: runtime objects (strings, lists, dicts, structs) are
 allocated from a process-wide arena and live for the duration of the process.

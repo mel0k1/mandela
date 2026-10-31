@@ -1990,6 +1990,10 @@ class CodeGen:
     # -- top level --------------------------------------------------------------
 
     def generate(self, items):
+        for it in items:
+            if it[0] in ("import", "from"):
+                fail("error: module imports are not supported by the C backend "
+                     "yet (line %d)" % (it[-2] if len(it) > 3 else 0))
         self.collect(items)
         for it in items:
             if it[0] == "let" and it[1] not in self.globals:

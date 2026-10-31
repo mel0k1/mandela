@@ -1,7 +1,9 @@
+from err import die_parse
+
 def lx_keywords() -> list[str]:
     return ["def", "return", "if", "elif", "else", "while", "for", "in", "let",
             "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
-            "struct", "unsafe"]
+            "struct", "unsafe", "import", "from", "as"]
 
 def lx_is_kw(w: str) -> bool:
     for k in lx_keywords():

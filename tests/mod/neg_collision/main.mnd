@@ -1,0 +1,3 @@
+from helper import one
+from other import one
+print(one())

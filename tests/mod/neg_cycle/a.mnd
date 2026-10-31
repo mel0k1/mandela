@@ -1,0 +1,4 @@
+import b
+
+def fa() -> int:
+    return 1

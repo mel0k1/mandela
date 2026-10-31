@@ -1,0 +1,6 @@
+from tools import cube, limit
+from tools import cube as c3
+
+print(cube(2))
+print(c3(3))
+print(limit)

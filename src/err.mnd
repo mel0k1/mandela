@@ -1,3 +1,16 @@
+let mut src_path = ""
+let mut src_lines = []
+
+def err_set_source(path: str, lines: list[str]):
+    src_path = path
+    src_lines = lines
+
+def err_cur_path() -> str:
+    return src_path
+
+def err_cur_lines() -> list[str]:
+    return src_lines
+
 def err_head(kind: str, code: str, msg: str) -> str:
     if code == "":
         return kind + ": " + msg

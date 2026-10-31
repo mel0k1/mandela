@@ -1,0 +1,4 @@
+import a
+
+def fb() -> int:
+    return 2

@@ -36,6 +36,37 @@ for f in "$ROOT"/tests/neg/*.mnd; do
     fi
 done
 
+cd "$ROOT"
+for d in tests/mod/*/; do
+    [ -e "${d}main.mnd" ] || continue
+    if [ -e "${d}out" ]; then
+        if out="$("$ROOT/bin/mandela" run "${d}main.mnd" 2>&1)" && [ "$out" = "$(cat "${d}out")" ]; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+            echo "FAIL mod pos: $d"
+            echo "--- expected ---"
+            cat "${d}out"
+            echo "--- got ---"
+            printf '%s\n' "$out"
+        fi
+    elif [ -e "${d}err" ]; then
+        if out="$("$ROOT/bin/mandela" check "${d}main.mnd" 2>&1)"; then
+            fail=$((fail + 1))
+            echo "FAIL mod neg (accepted invalid code): $d"
+        elif printf '%s' "$out" | grep -qF "$(cat "${d}err")"; then
+            pass=$((pass + 1))
+        else
+            fail=$((fail + 1))
+            echo "FAIL mod neg: $d"
+            echo "--- expected to contain ---"
+            cat "${d}err"
+            echo "--- got ---"
+            printf '%s\n' "$out"
+        fi
+    fi
+done
+
 # panic tests: valid programs that trap at runtime; both the interpreter and
 # the native binary must exit 101 with the same deterministic message
 for f in "$ROOT"/tests/panic/*.mnd; do

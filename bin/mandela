@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="$ROOT/bootstrap/mandela.py"
 CODEGEN="$ROOT/bootstrap/codegen.py"
-SRCS=("$ROOT/src/err.mnd" "$ROOT/src/lexer.mnd" "$ROOT/src/parser.mnd" "$ROOT/src/checker.mnd" "$ROOT/src/main.mnd")
+ENTRY="$ROOT/src/main.mnd"
 
 usage() {
-    echo "Mandela v0.6"
+    echo "Mandela v0.7"
     echo "usage: mandela <run|check|build|lex|ast> <file.mnd> [args...]"
     echo "       mandela build <file.mnd> [-o out] [--emit c|asm|bin]"
     echo "       mandela build --backend native <file.mnd> [-o out] [--arch x86-64|arm64]"
@@ -24,20 +24,20 @@ case "$cmd" in
     check|lex|ast)
         f="${1:-}"
         if [ -z "$f" ]; then usage; exit 1; fi
-        exec python3 "$HOST" "${SRCS[@]}" -- "$cmd" "$f"
+        exec python3 "$HOST" "$ENTRY" -- "$cmd" "$f"
         ;;
     run)
         f="${1:-}"
         if [ -z "$f" ]; then usage; exit 1; fi
         shift
-        python3 "$HOST" "${SRCS[@]}" -- check "$f"
+        python3 "$HOST" "$ENTRY" -- check "$f"
         exec python3 "$HOST" "$f" -- "$@"
         ;;
     build)
         f="${1:-}"
         if [ -z "$f" ]; then usage; exit 1; fi
         shift
-        python3 "$HOST" "${SRCS[@]}" -- check "$f"
+        python3 "$HOST" "$ENTRY" -- check "$f"
         case " $* " in
             *" --backend native"*)
                 nargs=()

@@ -11,8 +11,8 @@
 [English](README_EN.md) | Русский
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.5%20floating%20point-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-81%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.7%20modules-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -266,13 +266,18 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 ./bin/mandela ast file.mnd              # дамп AST в s-выражениях (отладка)
 ```
 
-## Возможности v0.5
+## Возможности v0.7
 
+- Модули и пакеты: `import`, `import ... as`, `from ... import ...`;
+  модуль = файл `.mnd`, пакет = каталог с `__init__.mnd`; изоляция
+  пространств имён, исполнение модуля при первом импорте, детект циклов
 - Статическая типизация с выводом типов: `let x = 5`, `let x = 2.5`,
   `list[int]`, `dict[str, int]`, `ptr[int]`, `ptr[Node]`
 - Числа с плавающей точкой `f64` (IEEE 754): литералы `2.5`, `1.5e-3`,
   арифметика без паник (`inf`/`nan`), кратчайший round-trip вывод,
   математика `abs sqrt floor ceil round pow`, явные конверсии `f64()`/`int()`
+- Прямой бэкенд машинного кода x86-64/ARM64 (v0.6): ELF собирается байт за
+  байтом, без C и без внешнего ассемблера/линкера
 - Неизменяемость по умолчанию: `let` против `let mut`, `mut self` для методов
 - Целые 64-битные числа (усечённое деление, переполнение по модулю 2^64),
   строки, `bool`, `nil`, списки, словари с сохранением порядка вставки
@@ -286,24 +291,25 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
   `break`, `continue`
 - Функции с обязательными аннотациями параметров, рекурсия, хоистинг функций
 - Встроенные: `print len str int f64 chr ord push pop split substr read_file
-  write_file args fatal exit range alloc arena_new arena_alloc arena_free
-  ptr_len is_null abs sqrt floor ceil round pow`
+  write_file file_exists args fatal exit range alloc arena_new arena_alloc
+  arena_free ptr_len is_null abs sqrt floor ceil round pow`
 - Кодогенерация: нативные бинари через системный тулчейн, `--emit c|asm|bin`
 - Строгий тайп-чекер с диагностиками `E0xxx`, предупреждения о неиспользуемых
-  переменных
+  переменных и импортах
 
 ## Roadmap
 
-| Версия | Что планируется |
+| Версия | Что сделано / планируется |
 | --- | --- |
+| v0.5 | Числа с плавающей точкой |
 | v0.6 | Прямой бэкенд в машинный код (x86-64/ARM64) без промежуточного представления |
-| v0.7 | Модули вместо линейных скриптов, менеджер пакетов |
-| v0.8 | Самосборка: компилятор Mandela генерирует машинный код для самого себя |
+| v0.7 | Модули и пакеты: импорты, изоляция имён, компилятор сам переведён на модули |
+| v0.8 | Модули в кодогенерации; самосборка: компилятор генерирует машинный код для самого себя |
 
 ## Разработка
 
 ```bash
-make test        # 81 тест: позитивные, негативные, паники и паритет нативной сборки
+make test        # 106 тестов: позитивные, негативные, паники, модули и паритет нативной сборки
 ```
 
 Каждый позитивный тест прогоняется дважды: интерпретатором и в скомпилированном
@@ -315,12 +321,13 @@ make test        # 81 тест: позитивные, негативные, па
 
 ```text
 bin/mandela          CLI
-bootstrap/mandela.py бутстрап-движок (интерпретатор)
+bootstrap/mandela.py бутстрап-движок (интерпретатор + загрузчик модулей)
 bootstrap/codegen.py бэкенд кодогенерации
-src/*.mnd            компилятор, написанный на Mandela
-spec/SPEC.md         спецификация языка v0.5
+bootstrap/native.py  прямой бэкенд машинного кода (x86-64/ARM64)
+src/*.mnd            компилятор, написанный на Mandela (модули: err lexer parser checker)
+spec/SPEC.md         спецификация языка v0.7
 examples/            примеры программ
-tests/               тесты (позитивные, негативные, паники, нативные)
+tests/               тесты (позитивные, негативные, паники, модули, нативные)
 ```
 
 ## Лицензия

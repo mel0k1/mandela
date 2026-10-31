@@ -1,0 +1,4 @@
+let name = "util"
+
+def banner(s: str) -> str:
+    return "[" + name + "] " + s

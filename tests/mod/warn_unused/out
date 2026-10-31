@@ -1,0 +1,6 @@
+warning: unused import `helper`
+  --> tests/mod/warn_unused/main.mnd:1:1
+  |
+1 | import helper
+  | ^
+done

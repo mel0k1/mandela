@@ -11,8 +11,8 @@ The Mandela compiler is written in Mandela itself.
 English | [Русский](README.md)
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.5%20floating%20point-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-81%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.7%20modules-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-106%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -266,13 +266,18 @@ generates machine code on its own (see the roadmap).
 ./bin/mandela ast file.mnd              # AST dump as s-expressions (debug)
 ```
 
-## v0.5 features
+## v0.7 features
 
+- Modules and packages: `import`, `import ... as`, `from ... import ...`;
+  a module is a `.mnd` file, a package is a directory with `__init__.mnd`;
+  namespace isolation, module execution on first import, cycle detection
 - Static typing with inference: `let x = 5`, `let x = 2.5`, `list[int]`,
   `dict[str, int]`, `ptr[int]`, `ptr[Node]`
 - Floating point `f64` (IEEE 754): literals `2.5`, `1.5e-3`, panic-free
   arithmetic (`inf`/`nan`), shortest round-trip printing, math built-ins
   `abs sqrt floor ceil round pow`, explicit `f64()`/`int()` conversions
+- Direct machine-code backend for x86-64/ARM64 (v0.6): the ELF is emitted
+  byte by byte, no C, no external assembler or linker
 - Immutability by default: `let` vs `let mut`, `mut self` for methods
 - 64-bit integers (truncating division, two's-complement wrap-around),
   strings, `bool`, `nil`, lists, insertion-ordered dictionaries
@@ -286,23 +291,25 @@ generates machine code on its own (see the roadmap).
   `break`, `continue`
 - Functions with mandatory parameter annotations, recursion, function hoisting
 - Built-ins: `print len str int f64 chr ord push pop split substr read_file
-  write_file args fatal exit range alloc arena_new arena_alloc arena_free
-  ptr_len is_null abs sqrt floor ceil round pow`
+  write_file file_exists args fatal exit range alloc arena_new arena_alloc
+  arena_free ptr_len is_null abs sqrt floor ceil round pow`
 - Code generation: native binaries via the system toolchain, `--emit c|asm|bin`
-- Strict type checker with `E0xxx` diagnostics, unused-variable warnings
+- Strict type checker with `E0xxx` diagnostics, unused-variable and
+  unused-import warnings
 
 ## Roadmap
 
-| Version | Plan |
+| Version | Done / plan |
 | --- | --- |
+| v0.5 | Floating point |
 | v0.6 | Direct machine-code backend (x86-64/ARM64) without an intermediate representation |
-| v0.7 | Modules instead of linear scripts, package manager |
-| v0.8 | Self-compilation: the Mandela compiler emits machine code for itself |
+| v0.7 | Modules and packages: imports, namespace isolation, the compiler itself moved to modules |
+| v0.8 | Modules in code generation; self-compilation: the compiler emits machine code for itself |
 
 ## Development
 
 ```bash
-make test        # 81 tests: positive, negative, panic and native-build parity
+make test        # 106 tests: positive, negative, panic, modules and native-build parity
 ```
 
 Every positive test runs twice: on the interpreter and compiled — the output
@@ -313,12 +320,13 @@ Repository layout:
 
 ```text
 bin/mandela          CLI
-bootstrap/mandela.py bootstrap engine (interpreter)
+bootstrap/mandela.py bootstrap engine (interpreter + module loader)
 bootstrap/codegen.py code generation backend
-src/*.mnd            the compiler, written in Mandela
-spec/SPEC.md         language specification v0.5
+bootstrap/native.py  direct machine-code backend (x86-64/ARM64)
+src/*.mnd            the compiler, written in Mandela (modules: err lexer parser checker)
+spec/SPEC.md         language specification v0.7
 examples/            example programs
-tests/               positive, negative, panic and native tests
+tests/               positive, negative, panic, module and native tests
 ```
 
 ## License

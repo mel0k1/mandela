@@ -1,0 +1,5 @@
+from geom import Point, origin
+
+let p = Point{x: 3, y: 4}
+print(p.norm2())
+print(origin().x)

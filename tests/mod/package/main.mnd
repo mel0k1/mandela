@@ -1,0 +1,9 @@
+import util.nums
+from util import nums
+from util.nums import double as d2
+
+print(util.nums.double(21))
+print(nums.double(4))
+print(d2(5))
+print(util.nums.tagged(6))
+print(util.banner("hi"))

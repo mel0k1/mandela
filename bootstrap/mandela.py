@@ -6,6 +6,7 @@ until the toolchain emits native code. Not part of the language itself.
 """
 
 import math
+import os
 import sys
 import threading
 
@@ -16,6 +17,7 @@ class CompileError(Exception):
         self.msg = msg
         self.line = line
         self.col = col
+        self.file = CUR_FILE
 
 
 class Panic(Exception):
@@ -86,10 +88,20 @@ class MndPtr:
         self.owner = owner
 
 
+class MModule:
+    __slots__ = ("name", "path", "env", "members")
+
+    def __init__(self, name, path):
+        self.name = name
+        self.path = path
+        self.env = None
+        self.members = {}
+
+
 KEYWORDS = {
     "def", "return", "if", "elif", "else", "while", "for", "in", "let",
     "mut", "true", "false", "nil", "and", "or", "not", "break", "continue",
-    "struct", "unsafe",
+    "struct", "unsafe", "import", "from", "as",
 }
 
 OPS2 = ("->", "==", "!=", "<=", ">=")
@@ -304,9 +316,44 @@ class Parser:
                 items.append(self.parse_def())
             elif self.at("kw", "struct"):
                 items.append(self.parse_struct())
+            elif self.at("kw", "import"):
+                items.append(self.parse_import())
+            elif self.at("kw", "from"):
+                items.append(self.parse_from())
             else:
                 items.append(self.parse_stmt())
         return ["program", items, 1, 1]
+
+    def parse_dotted(self):
+        t = self.expect("id", None, "a module path")
+        parts = [t[1]]
+        while self.eat("op", "."):
+            t = self.expect("id", None, "a module path component")
+            parts.append(t[1])
+        return ".".join(parts)
+
+    def parse_import(self):
+        t = self.next()
+        dotted = self.parse_dotted()
+        alias = ""
+        if self.eat("kw", "as"):
+            alias = self.expect("id", None, "an alias")[1]
+        return ["import", dotted, alias, t[2], t[3]]
+
+    def parse_from(self):
+        t = self.next()
+        dotted = self.parse_dotted()
+        self.expect("kw", "import", "`import`")
+        names = []
+        while True:
+            n = self.expect("id", None, "an imported name")
+            alias = ""
+            if self.eat("kw", "as"):
+                alias = self.expect("id", None, "an alias")[1]
+            names.append([n[1], alias])
+            if not self.eat("op", ","):
+                break
+        return ["from", dotted, names, t[2], t[3]]
 
     def parse_struct(self):
         t = self.next()
@@ -419,6 +466,10 @@ class Parser:
             return self.parse_for()
         if self.at("kw", "unsafe"):
             return self.parse_unsafe()
+        if self.at("kw", "import") or self.at("kw", "from"):
+            t = self.peek()
+            raise CompileError("`import` is only allowed at the top level of a module",
+                               t[2], t[3])
         return self.parse_simple()
 
     def parse_unsafe(self):
@@ -1096,6 +1147,13 @@ def bi_read_file(args, ip):
         raise Fatal("error: cannot read file '%s'" % p, 1)
 
 
+def bi_file_exists(args, ip):
+    p = one_arg(args, "file_exists()")
+    if not isinstance(p, str):
+        raise Panic("file_exists() expects a `str` path")
+    return os.path.isfile(p)
+
+
 def bi_write_file(args, ip):
     if len(args) != 2:
         raise Panic("write_file() takes exactly 2 arguments but %d were given" % len(args))
@@ -1342,6 +1400,7 @@ BUILTINS = {
     "int": bi_int, "f64": bi_f64, "chr": bi_chr, "ord": bi_ord,
     "push": bi_push, "pop": bi_pop,
     "split": bi_split, "substr": bi_substr, "read_file": bi_read_file,
+    "file_exists": bi_file_exists,
     "write_file": bi_write_file, "args": lambda a, ip: list(ip.argv),
     "fatal": bi_fatal, "exit": bi_exit, "range": bi_range,
     "alloc": bi_alloc, "arena_new": bi_arena_new, "arena_alloc": bi_arena_alloc,
@@ -1356,22 +1415,103 @@ class Interp:
         self.genv = Env(None)
         self.argv = argv
         self.structs = {}
+        self.modules = {}
+        self.loading = []
+        self.entry_dir = os.getcwd()
+        self.cur_dir = []
 
-    def run(self, program):
-        for item in program[1]:
-            if item[0] == "struct":
-                self.decl_struct(item)
-        for item in program[1]:
-            if item[0] == "def":
-                self.genv.vars[item[1]] = (item[2], item[4])
-        for item in program[1]:
-            if item[0] not in ("def", "struct"):
-                self.exec_stmt(item, self.genv)
+    def search_bases(self, importer_dir):
+        bases = []
+        for b in (importer_dir, self.entry_dir):
+            if b and b not in bases:
+                bases.append(b)
+        return bases
 
-    def decl_struct(self, item):
+    def load_path(self, dotted, importer_dir, line, col):
+        rel = dotted.replace(".", "/")
+        parts = dotted.split(".")
+        for base in self.search_bases(importer_dir):
+            leaf_file = os.path.join(base, rel + ".mnd")
+            leaf_pkg = os.path.join(base, rel, "__init__.mnd")
+            if os.path.isfile(leaf_file):
+                leaf = self.load_unit(dotted, leaf_file, line, col)
+            elif os.path.isfile(leaf_pkg):
+                leaf = self.load_unit(dotted, leaf_pkg, line, col)
+            else:
+                continue
+            chain = [leaf]
+            for i in range(len(parts) - 1, 0, -1):
+                prefix = ".".join(parts[:i])
+                pdir = os.path.join(base, "/".join(parts[:i]))
+                pinit = os.path.join(pdir, "__init__.mnd")
+                if os.path.isfile(pinit):
+                    pkg = self.load_unit(prefix, pinit, line, col)
+                elif os.path.isdir(pdir):
+                    key = os.path.realpath(pdir) + "/"
+                    pkg = self.modules.get(key)
+                    if pkg is None:
+                        pkg = MModule(prefix, pdir)
+                        self.modules[key] = pkg
+                else:
+                    raise CompileError("cannot find package `%s`" % prefix, line, col)
+                chain.append(pkg)
+            for k in range(len(chain) - 1):
+                chain[k + 1].members[parts[len(parts) - k - 1]] = chain[k]
+            return chain[-1], leaf
+        tried = ", ".join("`%s`" % os.path.join(b, rel + ".mnd")
+                          for b in self.search_bases(importer_dir))
+        raise CompileError("cannot find module `%s` (tried %s)" % (dotted, tried),
+                           line, col)
+
+    def load_unit(self, dotted, path, line, col, menv=None):
+        global CUR_FILE
+        key = os.path.realpath(path)
+        if key in self.loading:
+            names = [os.path.basename(p) for p in self.loading[self.loading.index(key):]]
+            names.append(os.path.basename(path))
+            raise CompileError("circular import: %s" % " -> ".join(names), line, col)
+        if key in self.modules:
+            return self.modules[key]
+        prev_file = CUR_FILE
+        CUR_FILE = path
+        try:
+            with open(path, encoding="utf-8") as fh:
+                src = fh.read()
+        except (OSError, UnicodeDecodeError):
+            raise CompileError("cannot read module file `%s`" % path, line, col)
+        mod = MModule(dotted, os.path.abspath(path))
+        self.modules[key] = mod
+        if menv is None:
+            menv = Env(None)
+        mod.env = menv
+        self.loading.append(key)
+        self.cur_dir.append(os.path.dirname(os.path.abspath(path)))
+        try:
+            ast = Parser(tokenize(src)).parse()
+            for item in ast[1]:
+                if item[0] == "struct":
+                    self.decl_struct(item, menv)
+            for item in ast[1]:
+                if item[0] == "def":
+                    fnval = (item[2], item[4], menv)
+                    menv.vars[item[1]] = fnval
+                    mod.members[item[1]] = fnval
+            for item in ast[1]:
+                if item[0] not in ("def", "struct"):
+                    self.exec_stmt(item, menv)
+            for k, v in menv.vars.items():
+                if k not in mod.members:
+                    mod.members[k] = v
+        finally:
+            self.loading.pop()
+            self.cur_dir.pop()
+            CUR_FILE = prev_file
+        return mod
+
+    def decl_struct(self, item, menv):
         methods = {}
         for m in item[3]:
-            methods[m[1]] = (m[2], m[4])
+            methods[m[1]] = (m[2], m[4], menv)
         self.structs[item[1]] = StructDef(item[1], item[2], methods)
 
     def exec_block(self, stmts, env):
@@ -1408,6 +1548,33 @@ class Interp:
             self.exec_for(node, env)
         elif tag == "unsafe":
             self.exec_block(node[1], Env(env))
+        elif tag == "import":
+            top, leaf = self.load_path(node[1], self.cur_dir[-1], node[3], node[4])
+            if node[2]:
+                env.vars[node[2]] = leaf
+            else:
+                env.vars[node[1].split(".")[0]] = top
+        elif tag == "from":
+            mod = self.load_path(node[1], self.cur_dir[-1], node[3], node[4])[1]
+            mdir = os.path.dirname(mod.path)
+            for pair in node[2]:
+                name, alias = pair[0], pair[1]
+                if name in mod.members:
+                    env.vars[alias or name] = mod.members[name]
+                    continue
+                sub_file = os.path.join(mdir, name + ".mnd")
+                sub_pkg = os.path.join(mdir, name, "__init__.mnd")
+                if os.path.isfile(sub_file) or os.path.isfile(sub_pkg):
+                    sub = self.load_path(node[1] + "." + name,
+                                         self.cur_dir[-1], node[3], node[4])[1]
+                    mod.members[name] = sub
+                    env.vars[alias or name] = sub
+                    continue
+                if name not in self.structs:
+                    raise CompileError("cannot import name `%s` from module `%s`"
+                                       % (name, node[1]), node[3], node[4])
+                if alias and alias != name:
+                    self.structs[alias] = self.structs[name]
         elif tag == "break":
             raise BreakEx()
         elif tag == "continue":
@@ -1577,6 +1744,10 @@ class Interp:
             if name in base.vals:
                 return base.vals[name]
             raise Panic("no field `%s` on type `%s`" % (name, base.sd.name))
+        if isinstance(base, MModule):
+            if name in base.members:
+                return base.members[name]
+            raise Panic("no member `%s` in module `%s`" % (name, base.name))
         raise Panic("no field `%s` on type `%s`" % (name, type_name(base)))
 
     def eval_call(self, node, env):
@@ -1590,15 +1761,38 @@ class Interp:
         b = BUILTINS.get(name)
         if b is not None:
             return b(args, self)
-        f = self.genv.vars.get(name)
+        f = None
+        scope = env
+        while scope is not None:
+            if name in scope.vars:
+                f = scope.vars[name]
+                break
+            scope = scope.parent
         if f is None or not isinstance(f, tuple):
             raise Panic("undefined function '%s'" % name)
-        params, body = f
+        params, body, menv = f
         if len(args) != len(params):
             raise Panic("function '%s' takes %d argument(s) but %d were given"
                         % (name, len(params), len(args)))
-        fenv = Env(self.genv)
+        fenv = Env(menv)
         for p, a in zip(params, args):
+            fenv.vars[p[0]] = a
+        try:
+            self.exec_block(body, fenv)
+        except ReturnEx as r:
+            return r.value
+        return None
+
+    def call_fn(self, f, base, args, what):
+        params, body, menv = f
+        rest = params[1:] if base is not None else params
+        if len(args) != len(rest):
+            raise Panic("function `%s` takes %d argument(s) but %d were given"
+                        % (what, len(rest), len(args)))
+        fenv = Env(menv)
+        if base is not None:
+            fenv.vars[params[0][0]] = base
+        for p, a in zip(rest, args):
             fenv.vars[p[0]] = a
         try:
             self.exec_block(body, fenv)
@@ -1615,27 +1809,24 @@ class Interp:
             return call_str_method(base, mname, args)
         if isinstance(base, MndDict):
             return call_dict_method(base, mname, args)
+        if isinstance(base, MModule):
+            m = base.members.get(mname)
+            if m is None:
+                raise Panic("no member `%s` in module `%s`" % (mname, base.name))
+            if isinstance(m, MModule):
+                raise Panic("module `%s` is not callable" % m.name)
+            if not isinstance(m, tuple):
+                raise Panic("member `%s` of module `%s` is not a function"
+                            % (mname, base.name))
+            return self.call_fn(m, None, args, mname)
         if not isinstance(base, MStruct):
             raise Panic("no method `%s` on type `%s`" % (mname, type_name(base)))
         m = base.sd.methods.get(mname)
         if m is None:
             raise Panic("no method `%s` on struct `%s`" % (mname, base.sd.name))
-        params, body = m
-        if not params:
+        if not m[0]:
             raise Panic("method `%s` has no `self` parameter" % mname)
-        rest = params[1:]
-        if len(args) != len(rest):
-            raise Panic("method `%s` takes %d argument(s) but %d were given"
-                        % (mname, len(rest), len(args)))
-        fenv = Env(self.genv)
-        fenv.vars[params[0][0]] = base
-        for p, a in zip(rest, args):
-            fenv.vars[p[0]] = a
-        try:
-            self.exec_block(body, fenv)
-        except ReturnEx as r:
-            return r.value
-        return None
+        return self.call_fn(m, base, args, mname)
 
     def eval_bin(self, node, env):
         op = node[1]
@@ -1710,19 +1901,15 @@ CUR_FILE = "<unknown>"
 
 
 def run_files(files, argv):
-    ip = Interp(argv)
-    items = []
     global CUR_FILE
-    for f in files:
-        CUR_FILE = f
-        try:
-            with open(f, encoding="utf-8") as fh:
-                src = fh.read()
-        except (OSError, UnicodeDecodeError):
-            raise Fatal("error: cannot open file '%s'" % f, 1)
-        items.extend(Parser(tokenize(src)).parse()[1])
+    if len(files) != 1:
+        raise Fatal("error: expected a single entry file; other modules are "
+                    "pulled in with `import`", 1)
+    ip = Interp(argv)
+    ip.entry_dir = os.path.dirname(os.path.abspath(files[0]))
+    ip.cur_dir = [ip.entry_dir]
+    ip.load_unit("", files[0], 1, 1, menv=ip.genv)
     CUR_FILE = files[0]
-    ip.run(["program", items, 1, 1])
 
 
 def main_work(argv):
@@ -1733,7 +1920,7 @@ def main_work(argv):
     else:
         files, rest = args, []
     if not files:
-        sys.stderr.write("usage: mandela.py <script.mnd> [more.mnd ...] [-- args]\n")
+        sys.stderr.write("usage: mandela.py <script.mnd> [-- args]\n")
         return 2
     try:
         run_files(files, rest)
@@ -1746,7 +1933,7 @@ def main_work(argv):
         sys.stderr.write("panic: %s\n" % e.msg)
         return 101
     except CompileError as e:
-        sys.stderr.write("error: %s\n  --> %s:%d:%d\n" % (e.msg, CUR_FILE, e.line, e.col))
+        sys.stderr.write("error: %s\n  --> %s:%d:%d\n" % (e.msg, e.file, e.line, e.col))
         return 1
     except RecursionError:
         sys.stderr.write("panic: stack overflow\n")

@@ -1,0 +1,3 @@
+import mstr as m
+
+print(m.shout("hey"))

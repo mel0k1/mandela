@@ -35,6 +35,8 @@ FLT_REGS_MAX = 8
 UNSUPPORTED_STMT = {
     "struct": "`struct` definitions",
     "unsafe": "`unsafe` blocks",
+    "import": "module imports",
+    "from": "module imports",
 }
 UNSUPPORTED_EXPR = {
     "list": "list literals",

@@ -1,5 +1,7 @@
-let mut src_path = ""
-let mut src_lines = []
+import err
+import lexer
+import parser
+import checker
 
 def dbg_pad(s: str, w: int) -> str:
     let mut out = s
@@ -133,18 +135,19 @@ def main_cli():
     let cmd = a[0]
     if cmd != "lex" and cmd != "ast" and cmd != "check":
         fatal("unknown command `" + cmd + "` (expected lex, ast or check)")
-    src_path = a[1]
+    let src_path = a[1]
     let text = read_file(src_path)
-    src_lines = split(text, "\n")
-    let toks = lex(text)
+    let src_lines = split(text, "\n")
+    err.err_set_source(src_path, src_lines)
+    let toks = lexer.lex(text)
     if cmd == "lex":
         dbg_tokens(toks)
         exit(0)
-    let ast = parse(toks)
+    let ast = parser.parse(toks)
     if cmd == "ast":
         print(dbg_sexpr(ast))
         exit(0)
-    let nerr = check_program(ast)
+    let nerr = checker.check_program(ast)
     if nerr > 0:
         exit(1)
 

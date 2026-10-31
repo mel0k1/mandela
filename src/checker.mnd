@@ -1,3 +1,7 @@
+from err import fmt_error, err_set_source, err_cur_path, err_cur_lines, arg_word
+import lexer
+import parser
+
 let mut c_funcs = []
 let mut c_structs = []
 let mut c_errs = []
@@ -9,11 +13,14 @@ let mut c_infor = false
 let mut c_unsafe = 0
 let mut c_ret = ""
 let mut c_retc = 0
+let mut c_mods = []
+let mut c_loading = []
+let mut c_entry = ""
 
 def ck_builtins() -> list[str]:
     return ["print", "len", "str", "int", "f64", "chr", "ord", "push", "pop",
-            "split", "substr", "read_file", "write_file", "args", "fatal", "exit",
-            "abs", "sqrt", "floor", "ceil", "round", "pow"]
+            "split", "substr", "read_file", "write_file", "file_exists", "args",
+            "fatal", "exit", "abs", "sqrt", "floor", "ceil", "round", "pow"]
 
 def ck_is_builtin(name: str) -> bool:
     for b in ck_builtins():
@@ -130,6 +137,347 @@ def ck_unused():
 def ck_node_pos(n: list[str]) -> list[int]:
     return [n[len(n) - 3], n[len(n) - 2]]
 
+def ck_dir_of(p: str) -> str:
+    let mut i = len(p) - 1
+    while i >= 0:
+        if p[i] == "/":
+            return substr(p, 0, i)
+        i = i - 1
+    return ""
+
+def ck_rel_path(dotted: str) -> str:
+    let mut out = ""
+    let mut i = 0
+    while i < len(dotted):
+        let c = dotted[i]
+        if c == ".":
+            out = out + "/"
+        else:
+            out = out + c
+        i = i + 1
+    return out
+
+def ck_join_dots(parts: list[str], n: int) -> str:
+    let mut out = ""
+    let mut i = 0
+    while i < n:
+        if out != "":
+            out = out + "."
+        out = out + parts[i]
+        i = i + 1
+    return out
+
+def ck_find_mod_path(path: str) -> list[str]:
+    for m in c_mods:
+        if m[1] == path:
+            return m
+    return nil
+
+def ck_find_mod_dotted(dotted: str) -> list[str]:
+    for m in c_mods:
+        if m[0] == dotted:
+            return m
+    return nil
+
+def ck_mod_fn(rec: list[str], name: str) -> list[str]:
+    for f in rec[2]:
+        if f[0] == name:
+            return f
+    return nil
+
+def ck_mod_struct(rec: list[str], name: str) -> list[str]:
+    for s in rec[3]:
+        if s[0] == name:
+            return s
+    return nil
+
+def ck_mod_let(rec: list[str], name: str) -> list[str]:
+    for v in rec[4]:
+        if v[0] == name:
+            return v
+    return nil
+
+def ck_mod_submod(rec: list[str], name: str) -> str:
+    for s in rec[5]:
+        if s[0] == name:
+            return s[1]
+    return ""
+
+def ck_loading_has(path: str) -> bool:
+    for p in c_loading:
+        if p == path:
+            return true
+    return false
+
+def ck_check_sig(f: list[str], args: list[str], pos: list[int]) -> str:
+    if len(args) != len(f[1]):
+        ck_arity(len(f[1]), len(args), pos)
+    let mut i = 0
+    while i < len(args) and i < len(f[1]):
+        let at = ck_expr(args[i])
+        if at == "list[_]":
+            let lit = args[i]
+            lit[len(lit) - 1] = f[1][i]
+        elif at != f[1][i] and not ck_nil_or_wild_ptr(f[1][i], at):
+            let apos = ck_node_pos(args[i])
+            ck_err("E0308", "mismatched types: expected `" + f[1][i] + "`, found `" + at + "`", apos[0], apos[1])
+        i = i + 1
+    if f[2] == "":
+        return "nil"
+    return f[2]
+
+def ck_mod_chain(node: list[str]) -> str:
+    if node[0] == "var":
+        let e = ck_lookup(node[1])
+        if e != nil and e[4] == "module":
+            e[3] = e[3] + 1
+            return e[1]
+        return ""
+    if node[0] == "field":
+        let base = ck_mod_chain(node[1])
+        if base == "":
+            return ""
+        let full = base + "." + node[2]
+        if ck_find_mod_dotted(full) != nil:
+            return full
+        return ""
+    return ""
+
+def ck_mod_field(dotted: str, name: str, line: int, col: int) -> str:
+    let rec = ck_find_mod_dotted(dotted)
+    if rec == nil:
+        return "int"
+    let f = ck_mod_fn(rec, name)
+    if f != nil:
+        ck_err("E0618", "function `" + dotted + "." + name + "` can only be called", line, col)
+        return "int"
+    let st = ck_mod_struct(rec, name)
+    if st != nil:
+        ck_err("E0412", "cannot find type `" + name + "` in this scope; import it with `from " + dotted + " import " + name + "`", line, col)
+        return "int"
+    let v = ck_mod_let(rec, name)
+    if v != nil:
+        return v[1]
+    let sub = ck_mod_submod(rec, name)
+    if sub != "":
+        ck_err("E0609", "module `" + sub + "` is not a value", line, col)
+        return "int"
+    ck_err("E0433", "could not find `" + name + "` in module `" + dotted + "`", line, col)
+    return "int"
+
+def ck_mod_call(dotted: str, name: str, node: list[str]) -> str:
+    let args = node[2]
+    let pos = [node[3], node[4]]
+    let rec = ck_find_mod_dotted(dotted)
+    if rec == nil:
+        for a in args:
+            ck_expr(a)
+        return "int"
+    let f = ck_mod_fn(rec, name)
+    if f != nil:
+        return ck_check_sig(f, args, pos)
+    let st = ck_mod_struct(rec, name)
+    if st != nil:
+        ck_err("E0618", "cannot call struct `" + dotted + "." + name + "`; import it with `from` and use `" + name + "{...}`", pos[0], pos[1])
+    else:
+        let v = ck_mod_let(rec, name)
+        if v != nil:
+            ck_err("E0618", "cannot call non-function value `" + dotted + "." + name + "`", pos[0], pos[1])
+        else:
+            let sub = ck_mod_submod(rec, name)
+            if sub != "":
+                ck_err("E0618", "module `" + sub + "` is not callable", pos[0], pos[1])
+            else:
+                ck_err("E0433", "could not find `" + name + "` in module `" + dotted + "`", pos[0], pos[1])
+    for a in args:
+        ck_expr(a)
+    return "int"
+
+def ck_load_unit(dotted: str, path: str, line: int, col: int) -> list[str]:
+    let cached = ck_find_mod_path(path)
+    if cached != nil:
+        return cached
+    if ck_loading_has(path):
+        let mut chain = ""
+        let mut started = false
+        for p in c_loading:
+            if p == path:
+                started = true
+            if started:
+                if chain != "":
+                    chain = chain + " -> "
+                chain = chain + p
+        ck_err("E0432", "circular import: " + chain + " -> " + path, line, col)
+        return nil
+    push(c_loading, path)
+    let text = read_file(path)
+    let lines = split(text, "\n")
+    let toks = lexer.lex(text)
+    let ast = parser.parse(toks)
+    let mut saved = [c_funcs, c_structs, c_scopes, c_loop, c_fn, c_infor,
+                     c_unsafe, c_ret, c_retc, err_cur_path(), err_cur_lines()]
+    err_set_source(path, lines)
+    c_funcs = []
+    c_structs = []
+    c_scopes = [[]]
+    c_loop = 0
+    c_fn = false
+    c_infor = false
+    c_unsafe = 0
+    c_ret = ""
+    c_retc = 0
+    ck_check_items(ast[1])
+    let rec = [dotted, path, c_funcs, c_structs, [], []]
+    for v in c_scopes[0]:
+        if v[4] == "let":
+            push(rec[4], [v[0], v[1]])
+    push(c_mods, rec)
+    c_funcs = saved[0]
+    c_structs = saved[1]
+    c_scopes = saved[2]
+    c_loop = saved[3]
+    c_fn = saved[4]
+    c_infor = saved[5]
+    c_unsafe = saved[6]
+    c_ret = saved[7]
+    c_retc = saved[8]
+    err_set_source(saved[9], saved[10])
+    pop(c_loading)
+    return rec
+
+def ck_load_module(dotted: str, line: int, col: int) -> list[str]:
+    let bydot = ck_find_mod_dotted(dotted)
+    if bydot != nil:
+        return bydot
+    let rel = ck_rel_path(dotted)
+    let parts = split(dotted, ".")
+    let cdir = ck_dir_of(err_cur_path())
+    let edir = ck_dir_of(c_entry)
+    let mut bases = [cdir]
+    if edir != cdir:
+        push(bases, edir)
+    let mut leaf = ""
+    let mut base = ""
+    for b in bases:
+        if leaf == "":
+            let c1 = b + "/" + rel + ".mnd"
+            let c2 = b + "/" + rel + "/__init__.mnd"
+            if file_exists(c1):
+                leaf = c1
+                base = b
+            elif file_exists(c2):
+                leaf = c2
+                base = b
+    if leaf == "":
+        let mut tried = ""
+        for b in bases:
+            if tried != "":
+                tried = tried + ", "
+            tried = tried + "`" + b + "/" + rel + ".mnd` or `" + b + "/" + rel + "/__init__.mnd`"
+        ck_err("E0432", "cannot find module `" + dotted + "` (tried " + tried + ")", line, col)
+        return nil
+    let rec = ck_load_unit(dotted, leaf, line, col)
+    if rec == nil:
+        return nil
+    let mut i = len(parts) - 1
+    while i >= 1:
+        let pdotted = ck_join_dots(parts, i)
+        let prec = ck_find_mod_dotted(pdotted)
+        if prec == nil:
+            let pdir = base + "/" + ck_rel_path(pdotted)
+            let pinit = pdir + "/__init__.mnd"
+            if file_exists(pinit):
+                prec = ck_load_unit(pdotted, pinit, line, col)
+            elif file_exists(pdir):
+                prec = [pdotted, pdir, [], [], [], []]
+                push(c_mods, prec)
+            else:
+                ck_err("E0432", "cannot find package `" + pdotted + "`", line, col)
+                prec = [pdotted, pdir, [], [], [], []]
+                push(c_mods, prec)
+        if prec != nil:
+            push(prec[5], [parts[i], ck_join_dots(parts, i + 1)])
+        i = i - 1
+    return rec
+
+def ck_bind_name(name: str, ty: str, kind: str, line: int, col: int) -> bool:
+    if ck_lookup(name) != nil or ck_find_fn(name) != nil or ck_find_struct(name) != nil or ck_is_builtin(name):
+        ck_err("E0252", "the name `" + name + "` is defined multiple times", line, col)
+        return false
+    push(c_scopes[0], [name, ty, false, 0, kind, line, col])
+    return true
+
+def ck_do_import(node: list[str]):
+    let dotted = node[1]
+    let parts = split(dotted, ".")
+    let rec = ck_load_module(dotted, node[3], node[4])
+    if rec == nil:
+        return
+    if node[2] != "":
+        ck_bind_name(node[2], dotted, "module", node[3], node[4])
+    else:
+        ck_bind_name(parts[0], parts[0], "module", node[3], node[4])
+
+def ck_do_from(node: list[str]):
+    let dotted = node[1]
+    let rec = ck_load_module(dotted, node[3], node[4])
+    if rec == nil:
+        return
+    for pair in node[2]:
+        let name = pair[0]
+        let bind = pair[1]
+        if bind == "":
+            bind = name
+        let f = ck_mod_fn(rec, name)
+        if f != nil:
+            if ck_bind_name(bind, f[2], "import", node[3], node[4]):
+                push(c_funcs, [bind, f[1], f[2]])
+            continue
+        let st = ck_mod_struct(rec, name)
+        if st != nil:
+            if ck_bind_name(bind, name, "import", node[3], node[4]):
+                push(c_structs, [bind, st[1], st[2]])
+            continue
+        let v = ck_mod_let(rec, name)
+        if v != nil:
+            ck_bind_name(bind, v[1], "import", node[3], node[4])
+            continue
+        let mdir = ck_dir_of(rec[1])
+        if file_exists(mdir + "/" + name + ".mnd") or file_exists(mdir + "/" + name + "/__init__.mnd"):
+            let sub = ck_load_module(dotted + "." + name, node[3], node[4])
+            if sub != nil:
+                ck_bind_name(bind, dotted + "." + name, "module", node[3], node[4])
+            continue
+        ck_err("E0433", "could not find `" + name + "` in module `" + dotted + "`", node[3], node[4])
+
+def ck_unused_imports():
+    for v in c_scopes[0]:
+        if v[3] == 0 and (v[4] == "module" or v[4] == "import") and substr(v[0], 0, 1) != "_":
+            push(c_warns, fmt_error("warning", "", "unused import `" + v[0] + "`", v[5], v[6]))
+
+def ck_check_items(items: list[str]):
+    for it in items:
+        if it[0] == "struct":
+            ck_collect_struct(it)
+    for it in items:
+        if it[0] == "def":
+            ck_collect_fn(it)
+    for it in items:
+        if it[0] == "import":
+            ck_do_import(it)
+        elif it[0] == "from":
+            ck_do_from(it)
+    for it in items:
+        if it[0] == "struct":
+            for m in ck_find_struct(it[1])[2]:
+                ck_method(it[1], m)
+    for it in items:
+        if it[0] == "def":
+            ck_fn(it)
+        elif it[0] != "struct" and it[0] != "import" and it[0] != "from":
+            ck_stmt(it)
+    ck_unused_imports()
+
 def check_program(ast: list[str]) -> int:
     c_funcs = []
     c_structs = []
@@ -138,22 +486,14 @@ def check_program(ast: list[str]) -> int:
     c_scopes = [[]]
     c_loop = 0
     c_fn = false
+    c_infor = false
     c_unsafe = 0
-    for it in ast[1]:
-        if it[0] == "struct":
-            ck_collect_struct(it)
-    for it in ast[1]:
-        if it[0] == "def":
-            ck_collect_fn(it)
-    for it in ast[1]:
-        if it[0] == "struct":
-            for m in ck_find_struct(it[1])[2]:
-                ck_method(it[1], m)
-    for it in ast[1]:
-        if it[0] == "def":
-            ck_fn(it)
-        else:
-            ck_stmt(it)
+    c_ret = ""
+    c_retc = 0
+    c_mods = []
+    c_loading = []
+    c_entry = err_cur_path()
+    ck_check_items(ast[1])
     for e in c_errs:
         eprint(e)
     if len(c_errs) == 0:
@@ -259,6 +599,8 @@ def ck_method(sname: str, m: list[str]):
 
 def ck_stmt(node: list[str]):
     let tag = node[0]
+    if tag == "import" or tag == "from":
+        return
     if tag == "let":
         ck_let(node)
     elif tag == "assign":
@@ -476,6 +818,9 @@ def ck_expr(node: list[str]) -> str:
         if e == nil:
             ck_err("E0425", "cannot find value `" + node[1] + "` in this scope", node[2], node[3])
             t = "int"
+        elif e[4] == "module":
+            ck_err("E0609", "module `" + node[1] + "` is not a value", node[2], node[3])
+            t = "int"
         else:
             e[3] = e[3] + 1
             t = e[1]
@@ -486,18 +831,22 @@ def ck_expr(node: list[str]) -> str:
     elif tag == "call":
         t = ck_call(node)
     elif tag == "field":
-        let bt = ck_expr(node[1])
-        let sd = ck_find_struct(bt)
-        if sd == nil:
-            ck_err("E0609", "no field `" + node[2] + "` on type `" + bt + "`", node[3], node[4])
-            t = "int"
+        let mdotted = ck_mod_chain(node[1])
+        if mdotted != "":
+            t = ck_mod_field(mdotted, node[2], node[3], node[4])
         else:
-            let ft = ck_find_field(sd, node[2])
-            if ft == nil:
+            let bt = ck_expr(node[1])
+            let sd = ck_find_struct(bt)
+            if sd == nil:
                 ck_err("E0609", "no field `" + node[2] + "` on type `" + bt + "`", node[3], node[4])
                 t = "int"
             else:
-                t = ft
+                let ft = ck_find_field(sd, node[2])
+                if ft == nil:
+                    ck_err("E0609", "no field `" + node[2] + "` on type `" + bt + "`", node[3], node[4])
+                    t = "int"
+                else:
+                    t = ft
     elif tag == "slit":
         t = ck_slit(node)
     elif tag == "index":
@@ -624,6 +973,9 @@ def ck_slit(node: list[str]) -> str:
         for f in node[2]:
             ck_expr(f[1])
         return "int"
+    let ie = ck_lookup(name)
+    if ie != nil and ie[4] == "import":
+        ie[3] = ie[3] + 1
     let mut given = []
     for f in node[2]:
         let ft = ck_find_field(sd, f[0])
@@ -773,6 +1125,9 @@ def ck_call(node: list[str]) -> str:
     let args = node[2]
     let pos = [node[3], node[4]]
     if fnode[0] == "field":
+        let mdotted = ck_mod_chain(fnode[1])
+        if mdotted != "":
+            return ck_mod_call(mdotted, fnode[2], node)
         return ck_method_call(node, fnode)
     if fnode[0] != "var":
         ck_err("E0618", "cannot call a non-function expression", pos[0], pos[1])
@@ -884,6 +1239,10 @@ def ck_call(node: list[str]) -> str:
         ck_typed_arg(args[0], "str")
         ck_typed_arg(args[1], "str")
         return "nil"
+    if name == "file_exists":
+        ck_arity(1, n, pos)
+        ck_typed_arg(args[0], "str")
+        return "bool"
     if name == "args":
         if n != 0:
             ck_err("E0061", "this function takes 0 arguments but " + str(n) + " were supplied", pos[0], pos[1])
@@ -935,27 +1294,19 @@ def ck_call(node: list[str]) -> str:
     if f == nil:
         let v = ck_lookup(name)
         if v != nil:
-            ck_err("E0618", "cannot call non-function value `" + name + "` of type `" + v[1] + "`", pos[0], pos[1])
+            if v[4] == "module":
+                ck_err("E0618", "module `" + name + "` is not callable", pos[0], pos[1])
+            else:
+                ck_err("E0618", "cannot call non-function value `" + name + "` of type `" + v[1] + "`", pos[0], pos[1])
         else:
             ck_err("E0425", "cannot find function `" + name + "` in this scope", pos[0], pos[1])
         for a in args:
             ck_expr(a)
         return "int"
-    if n != len(f[1]):
-        ck_err("E0061", "this function takes " + arg_word(len(f[1])) + " but " + str(n) + " arguments were supplied", pos[0], pos[1])
-    let mut i = 0
-    while i < n and i < len(f[1]):
-        let at = ck_expr(args[i])
-        if at == "list[_]":
-            let lit = args[i]
-            lit[len(lit) - 1] = f[1][i]
-        elif at != f[1][i] and not ck_nil_or_wild_ptr(f[1][i], at):
-            let apos = ck_node_pos(args[i])
-            ck_err("E0308", "mismatched types: expected `" + f[1][i] + "`, found `" + at + "`", apos[0], apos[1])
-        i = i + 1
-    if f[2] == "":
-        return "nil"
-    return f[2]
+    let e = ck_lookup(name)
+    if e != nil and e[4] == "import":
+        e[3] = e[3] + 1
+    return ck_check_sig(f, args, pos)
 
 def ck_arity(want: int, got: int, pos: list[int]):
     if want != got:

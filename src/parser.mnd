@@ -51,6 +51,8 @@ def p_at2(off: int, kind: str, val: str) -> bool:
         return t[0] == kind
     return t[0] == kind and t[1] == val
 
+from err import die_parse
+
 def parse(toks: list[str]) -> list[str]:
     p_toks = toks
     p_i = 0
@@ -64,9 +66,44 @@ def parse(toks: list[str]) -> list[str]:
             push(items, p_def())
         elif p_at("kw", "struct"):
             push(items, p_struct())
+        elif p_at("kw", "import"):
+            push(items, p_import())
+        elif p_at("kw", "from"):
+            push(items, p_from())
         else:
             push(items, p_stmt())
     return ["program", items, 1, 1]
+
+def p_dotted() -> str:
+    let t = p_expect("id", "", "a module path")
+    let mut path = t[1]
+    while p_eat("op", ".") != nil:
+        let c = p_expect("id", "", "a module path component")
+        path = path + "." + c[1]
+    return path
+
+def p_import() -> list[str]:
+    let t = p_next()
+    let path = p_dotted()
+    let mut alias = ""
+    if p_eat("kw", "as") != nil:
+        alias = p_expect("id", "", "an alias")[1]
+    return ["import", path, alias, t[2], t[3]]
+
+def p_from() -> list[str]:
+    let t = p_next()
+    let path = p_dotted()
+    p_expect("kw", "import", "`import`")
+    let mut names = []
+    while true:
+        let n = p_expect("id", "", "an imported name")
+        let mut alias = ""
+        if p_eat("kw", "as") != nil:
+            alias = p_expect("id", "", "an alias")[1]
+        push(names, [n[1], alias])
+        if p_eat("op", ",") == nil:
+            break
+    return ["from", path, names, t[2], t[3]]
 
 def p_struct() -> list[str]:
     let t = p_next()
@@ -168,6 +205,9 @@ def p_block() -> list[str]:
     return [p_simple()]
 
 def p_stmt() -> list[str]:
+    if p_at("kw", "import") or p_at("kw", "from"):
+        let t = p_peek()
+        die_parse("`import` is only allowed at the top level of a module", t[2], t[3])
     if p_at("kw", "if"):
         return p_if()
     if p_at("kw", "while"):
