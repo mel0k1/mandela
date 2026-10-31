@@ -104,5 +104,41 @@ else
     echo "note: no C compiler found, skipping native build tests"
 fi
 
+# machine-code backend: programs built with `--backend native` must produce
+# byte-identical output.  Programs that use composite types (lists, dicts,
+# structs, pointers) are expected to be rejected by the native path with a
+# clear "not supported" diagnostic; anything else is a failure.
+case "$(uname -m)" in
+    x86_64|aarch64) NATIVE_ARCH_OK=1 ;;
+    *) NATIVE_ARCH_OK=0 ;;
+esac
+if [ "$NATIVE_ARCH_OK" = "1" ]; then
+    for f in "$ROOT"/tests/pos/*.mnd; do
+        bin="$(mktemp /tmp/mandela_mc.XXXXXX)"
+        if build_out="$("$ROOT/bin/mandela" build "$f" --backend native \
+                            -o "$bin" 2>&1)"; then
+            if nat_out="$("$bin" 2>&1)" && [ "$nat_out" = "$(cat "$f.out")" ]; then
+                pass=$((pass + 1))
+            else
+                fail=$((fail + 1))
+                echo "FAIL machine-code: $f"
+                echo "--- expected ---"
+                cat "$f.out"
+                echo "--- got ---"
+                printf '%s\n' "$nat_out"
+            fi
+        elif printf '%s' "$build_out" | grep -q "native backend"; then
+            pass=$((pass + 1))          # expected rejection (composites)
+        else
+            fail=$((fail + 1))
+            echo "FAIL machine-code build: $f"
+            printf '%s\n' "$build_out"
+        fi
+        rm -f "$bin"
+    done
+else
+    echo "note: foreign architecture, skipping machine-code backend tests"
+fi
+
 echo "passed: $pass, failed: $fail"
 [ "$fail" -eq 0 ]

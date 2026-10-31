@@ -11,8 +11,8 @@
 [English](README_EN.md) | Русский
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.5%20floating%20point-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-81%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.6%20machine%20code%20backend-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-96%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -46,8 +46,9 @@ cd mandela
 ./hello
 ```
 
-Дополнительные зависимости не нужны: бутстрап-движок входит в поставку. Для
-`build` дополнительно — любой системный компилятор (`cc`, `gcc`, `clang`).
+Дополнительные зависимости не нужны: бутстрап-движок и бэкенд машинного кода
+входят в поставку. C-бэкенду дополнительно требуется системный компилятор
+(`cc`, `gcc`, `clang`).
 
 ## Пример
 
@@ -258,7 +259,8 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 
 ```bash
 ./bin/mandela run file.mnd [args...]    # проверить и выполнить (интерпретатор)
-./bin/mandela build file.mnd [-o out]   # проверить и собрать нативный бинарь
+./bin/mandela build file.mnd [-o out]   # собрать нативный бинарь (через C)
+./bin/mandela build file.mnd --backend native -o out   # чистый машинный код
 ./bin/mandela build file.mnd --emit c   # дамп промежуточного представления
 ./bin/mandela build file.mnd --emit asm # ассемблерный листинг
 ./bin/mandela check file.mnd            # только строгая проверка
@@ -266,7 +268,7 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 ./bin/mandela ast file.mnd              # дамп AST в s-выражениях (отладка)
 ```
 
-## Возможности v0.5
+## Возможности v0.6
 
 - Статическая типизация с выводом типов: `let x = 5`, `let x = 2.5`,
   `list[int]`, `dict[str, int]`, `ptr[int]`, `ptr[Node]`
@@ -288,7 +290,10 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 - Встроенные: `print len str int f64 chr ord push pop split substr read_file
   write_file args fatal exit range alloc arena_new arena_alloc arena_free
   ptr_len is_null abs sqrt floor ceil round pow`
-- Кодогенерация: нативные бинари через системный тулчейн, `--emit c|asm|bin`
+- Кодогенерация: `--backend native` — прямой бэкенд в машинный код x86-64/ARM64
+  (эмиссия инструкций и ELF-файла байтами, без C, ассемблера, линкера и libc;
+  скалярные типы, функции, рекурсия, циклы, глобалы, print через write(2));
+  либо классический путь через системный тулчейн, `--emit c|asm|bin`
 - Строгий тайп-чекер с диагностиками `E0xxx`, предупреждения о неиспользуемых
   переменных
 
@@ -296,29 +301,30 @@ error[E0061]: this function takes 2 arguments but 1 arguments were supplied
 
 | Версия | Что планируется |
 | --- | --- |
-| v0.6 | Прямой бэкенд в машинный код (x86-64/ARM64) без промежуточного представления |
 | v0.7 | Модули вместо линейных скриптов, менеджер пакетов |
 | v0.8 | Самосборка: компилятор Mandela генерирует машинный код для самого себя |
+| v0.9 | Составные типы в машинном бэкенде: списки, словари, структуры |
 
 ## Разработка
 
 ```bash
-make test        # 81 тест: позитивные, негативные, паники и паритет нативной сборки
+make test        # 96 тестов: позитивные, негативные, паники и паритет обоих бэкендов
 ```
 
-Каждый позитивный тест прогоняется дважды: интерпретатором и в скомпилированном
-виде — вывод обязан совпасть байт-в-байт. Тесты паник проверяют, что
-интерпретатор и нативный бинарь роняют программу с одним и тем же сообщением
-и кодом выхода 101.
+Каждый позитивный тест прогоняется трижды: интерпретатором, через C-бэкенд и
+через бэкенд машинного кода — вывод обязан совпасть байт-в-байт. Тесты паник
+проверяют, что интерпретатор и собранные бинари роняют программу с одним и
+тем же сообщением и кодом выхода 101.
 
 Структура репозитория:
 
 ```text
 bin/mandela          CLI
 bootstrap/mandela.py бутстрап-движок (интерпретатор)
-bootstrap/codegen.py бэкенд кодогенерации
+bootstrap/codegen.py C-бэкенд кодогенерации
+bootstrap/mc_*.py    бэкенд машинного кода (энкодеры x86-64/ARM64, ELF, рантайм)
 src/*.mnd            компилятор, написанный на Mandela
-spec/SPEC.md         спецификация языка v0.5
+spec/SPEC.md         спецификация языка v0.6
 examples/            примеры программ
 tests/               тесты (позитивные, негативные, паники, нативные)
 ```

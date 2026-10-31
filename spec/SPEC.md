@@ -1,4 +1,4 @@
-# The Mandela Language Specification — v0.5.0
+# The Mandela Language Specification — v0.6.0
 
 Status: draft, implemented by the self-hosted compiler in `src/` and the code
 generator in `bootstrap/codegen.py`.
@@ -19,7 +19,7 @@ Blank lines and comment-only lines carry no indentation significance.
 ### 1.2 Comments
 
 A comment starts with `#` and extends to the end of the line. There are no
-block comments and no docstrings in v0.5.
+block comments and no docstrings in v0.6.
 
 ### 1.3 Identifiers and keywords
 
@@ -52,7 +52,7 @@ true  false  nil  and  or  not  break  continue  unsafe
 | --- | --- |
 | `int` | Signed 64-bit integer. Division `/` and remainder `%` truncate toward zero. Overflow wraps in two's complement. |
 | `f64` | IEEE 754 double-precision float; see §11. |
-| `str` | Immutable string. Indexing yields a one-character string. In native builds strings are byte sequences, so string offsets and lengths are reliable for ASCII input in v0.5. |
+| `str` | Immutable string. Indexing yields a one-character string. In native builds strings are byte sequences, so string offsets and lengths are reliable for ASCII input in v0.6. |
 | `bool` | `true` or `false`. Conditions must be `bool`; there is no truthiness coercion. |
 | `nil` | The unit-ish value `nil`, returned by functions without `->`. |
 | `list[T]` | Growable array of `T`. Empty literals require an annotation: `let a: list[int] = []`. |
@@ -197,7 +197,7 @@ identically.
 Mandela has no garbage collector. Bulk memory is managed explicitly with
 region-based allocation: pointers are carved out of arenas and released
 together with the arena they came from. All pointer operations are checked at
-runtime — there is no undefined behaviour in v0.5.
+runtime — there is no undefined behaviour in v0.6.
 
 ### 8.1 Allocation
 
@@ -488,13 +488,49 @@ error: expected `(`, found identifier `x`
 
 ## 15. The toolchain and code generation
 
-`mandela build program.mnd` produces a native executable:
+`mandela build program.mnd` produces a native executable. v0.6 ships two
+backends behind one command:
 
-1. **Check** — the self-hosted compiler front-end (`src/*.mnd`: lexer, parser,
-   checker) validates the program.
-2. **Lower** — `bootstrap/codegen.py` lowers the AST to a single self-contained
-   C source file. The runtime is a small set of C structs: a tagged
-   `MndValue`, `MndStr`, `MndList`, `MndStruct` and an open-addressed
+### 15.1 Machine-code backend (`--backend native`)
+
+`mandela build program.mnd --backend native [-o out] [--arch x86-64|arm64]`
+lowers the checked program straight to machine code and wraps it into a
+statically linked ELF executable. Nothing but the Linux kernel is involved:
+no intermediate C, no assembler, no linker, no libc.
+
+1. **Check** — the self-hosted compiler front-end (`src/*.mnd`) validates the
+   program.
+2. **Lower** — `bootstrap/native.py` walks the AST and emits a flat,
+   architecture-neutral instruction DSL: stack slots for locals, a frame
+   register (`FREG`), spill area, direct calls in the runtime ABI.
+3. **Emit** — `bootstrap/mc_x64.py` / `bootstrap/mc_a64.py` encode every
+   instruction byte by byte (System V AMD64 and AAPCS64: arguments in
+   `rdi rsi rdx rcx r8 r9` / `x0-x7`, return in `rax` / `x0`), and
+   `bootstrap/mc_elf.py` writes the ELF64 image (an R+X segment with code and
+   read-only data at `0x400000`, a zero-filled RW segment for globals).
+
+The runtime (`bootstrap/mc_rt.py`) is emitted as real machine code too. It
+talks to the kernel directly (`write`, `exit_group`, `mmap` syscalls) and owns
+a bump allocator carved out of one anonymous mmap. Float printing implements
+the shortest round-trip representation over an exact 192-bit integer
+machinery; `rt_f64_from_decimal` inverts it for the round-trip search.
+
+Supported in v0.6: `int`, `f64`, `bool`, `str`, `nil` scalars, functions and
+recursion, globals, `if`/`while`/`for` (range and strings), `break`/
+`continue`, and the built-ins `print eprint len str int f64 chr ord abs sqrt
+floor ceil round substr exit fatal`. Composite types (lists, dicts, structs,
+pointers) and `pow` stay on the C backend; the native path rejects them with
+a compile error.
+
+### 15.2 C backend (default)
+
+`mandela build program.mnd [-o out] [--emit c|asm|bin]` goes through an
+intermediate C source file:
+
+1. **Check** — the same self-hosted front-end.
+2. **Lower** — `bootstrap/codegen.py` lowers the AST to a single
+   self-contained C source file. The runtime is a small set of C structs: a
+   tagged `MndValue`, `MndStr`, `MndList`, `MndStruct` and an open-addressed
    insertion-ordered `MndDict`. User structs become definition tables (field
    names + method table); methods become plain functions dispatched by name.
 3. **Assemble** — the system C toolchain (`cc`, honoured via `$CC`) compiles
@@ -503,9 +539,10 @@ error: expected `(`, found identifier `x`
 `--emit c` writes the intermediate representation as `.c` source, `--emit asm`
 writes the assembly listing, `--emit bin` (default) writes the executable.
 `mandela run` executes programs on the bootstrap interpreter after the same
-check; the two backends are kept output-identical by the test suite.
+check; the test suite keeps the interpreter and both backends
+output-identical, byte for byte.
 
-Memory model in v0.5: runtime objects (strings, lists, dicts, structs) are
+Memory model in v0.6: runtime objects (strings, lists, dicts, structs) are
 allocated from a process-wide arena and live for the duration of the process.
 Bulk buffers are explicit: `alloc`/`arena_alloc` hand out pointer views over
 arena slots, and `arena_free` releases a whole region at once. Individual
