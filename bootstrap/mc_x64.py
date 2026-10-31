@@ -1,32 +1,20 @@
 #!/usr/bin/env python3
-"""x86-64 machine code encoder for the Mandela native backend (v0.6).
 
-Emits raw System V AMD64 instruction bytes for the instruction subset the
-native backend needs: integer ALU ops, SSE2 float ops, calls/branches with
-rel32 fixups, syscall stubs. No external assembler is involved: every byte
-is produced here.
-
-Registers are named by their encoding number (0=RAX .. 15=R15). Memory
-operands are restricted to [reg + disp32] forms (ModRM mod=10), which is
-enough for rbp-relative frames.
-"""
-
-REX_W = 0x48          # REX prefix: 64-bit operand size
-REX_B = 0x01          # extension bit for rm/r
-REX_X = 0x02          # extension bit for index
-REX_R = 0x04          # extension bit for reg
+REX_W = 0x48
+REX_B = 0x01
+REX_X = 0x02
+REX_R = 0x04
 
 RAX, RCX, RDX, RBX = 0, 1, 2, 3
 RSP, RBP, RSI, RDI = 4, 5, 6, 7
 R8, R9, R10, R11 = 8, 9, 10, 11
 R12, R13, R14, R15 = 12, 13, 14, 15
 
-ARG_REGS = [RDI, RSI, RDX, RCX, R8, R9]     # integer-class args (SysV AMD64)
+ARG_REGS = [RDI, RSI, RDX, RCX, R8, R9]
 RET_REG = RAX
-RET_REG2 = RDX                              # second half of a {ptr, len} pair
+RET_REG2 = RDX
 
-# condition codes for setcc/jcc (full second byte for setcc)
-SE_O = 0x90  # seto
+SE_O = 0x90
 SE_NO = 0x91
 SE_B = 0x92
 SE_AE = 0x93
@@ -43,7 +31,6 @@ SE_GE = 0x9D
 SE_LE = 0x9E
 SE_G = 0x9F
 
-# branch opcodes (low byte after 0x0F)
 JB_O = 0x80
 JB_B = 0x82
 JB_AE = 0x83
@@ -60,27 +47,20 @@ JB_GE = 0x8D
 JB_LE = 0x8E
 JB_G = 0x8F
 
-
 class Asm:
-    """Byte buffer + label fixups. `kind` of a fixup is 'rel32' or 'abs64'."""
 
     def __init__(self):
         self.buf = bytearray()
         self.labels = {}
-        self.fixups = []            # (buf pos, label, kind)
-
-    # -- labels ---------------------------------------------------------
+        self.fixups = []
 
     def label(self, name):
-        """Bind `name` to the current position."""
         if name in self.labels:
             raise RuntimeError("duplicate label %s" % name)
         self.labels[name] = len(self.buf)
 
     def here(self):
         return len(self.buf)
-
-    # -- low-level emitters ----------------------------------------------
 
     def byte(self, *bs):
         self.buf.extend(bs)
@@ -94,7 +74,6 @@ class Asm:
             self.byte((v >> (8 * i)) & 0xFF)
 
     def _rex(self, reg, rm, w=True):
-        """REX prefix covering reg (modrm.reg) and rm (modrm.rm or index)."""
         b = (REX_W if w else 0x40)
         if reg >= 8:
             b |= REX_R
@@ -107,22 +86,16 @@ class Asm:
         self.byte((mod << 6) | ((reg & 7) << 3) | (rm & 7))
 
     def mem_rm(self, base, disp, reg):
-        """modrm for [base + disp32] with given reg field; returns True if
-        a SIB byte is required (rsp/rbp-free bases never need one here)."""
         self._rex(reg, base)
         self.modrm(2, reg, base)
         self.imm32(disp)
 
-    # -- moves -------------------------------------------------------------
-
     def mov_rr(self, dst, src):
-        """dst = src (64-bit)."""
         self._rex(src, dst)
         self.byte(0x89)
         self.modrm(3, src, dst)
 
     def mov_ir(self, dst, imm):
-        """dst = imm (sign-extended imm32 when it fits, else full imm64)."""
         if -(1 << 31) <= imm < (1 << 31):
             self._rex(0, dst)
             self.byte(0xC7)
@@ -149,7 +122,6 @@ class Asm:
         self.imm32(disp & 0xFFFFFFFF)
 
     def _sse_mem_rex(self, base, xmm_reg):
-        """REX for an SSE memory operand (no REX.W; extends reg/rm past 7)."""
         b = 0x40
         if xmm_reg >= 8:
             b |= REX_R
@@ -159,19 +131,16 @@ class Asm:
             self.byte(b)
 
     def mov_rm(self, dst, base, disp):
-        """dst = [base + disp]."""
         self._mem_rex(base, dst)
         self.byte(0x8B)
         self._mem_modrm(base, disp, dst)
 
     def mov_mr(self, base, disp, src):
-        """[base + disp] = src."""
         self._mem_rex(base, src)
         self.byte(0x89)
         self._mem_modrm(base, disp, src)
 
     def mov_addr(self, dst, label):
-        """dst = absolute address of label (patched after layout)."""
         if dst >= 8:
             self.byte(REX_W | REX_B)
         else:
@@ -181,13 +150,10 @@ class Asm:
         self.imm64(0)
 
     def lea_rbp(self, dst, disp):
-        """dst = rbp + disp (disp is negative for locals)."""
         self._rex(0, dst)
         self.byte(0x8D)
         self.modrm(2, dst, RBP)
         self.imm32(disp & 0xFFFFFFFF)
-
-    # -- integer ALU -----------------------------------------------------
 
     def _alu_rr(self, opbyte, dst, src):
         self._rex(src, dst)
@@ -216,7 +182,6 @@ class Asm:
         self._alu_rr(0x31, dst, src)
 
     def cmp_rr(self, a, b):
-        """compare a with b (flags from a - b)."""
         self._alu_rr(0x39, a, b)
 
     def add_ir(self, dst, imm):
@@ -238,38 +203,32 @@ class Asm:
         self._alu_ir(7, dst, imm)
 
     def imul_rr(self, dst, src):
-        """dst *= src."""
         self._rex(dst, src)
         self.byte(0x0F, 0xAF)
         self.modrm(3, dst, src)
 
     def imul_ir(self, dst, imm):
-        """dst *= imm (imul r64, r/m64, imm32)."""
         self._rex(dst, dst)
         self.byte(0x69)
         self.modrm(3, dst, dst)
         self.imm32(imm & 0xFFFFFFFF)
 
     def idiv_r(self, reg):
-        """signed divide rdx:rax by reg (quotient rax, remainder rdx)."""
         self._rex(7, reg)
         self.byte(0xF7)
         self.modrm(3, 7, reg)
 
     def mul_r(self, reg):
-        """unsigned multiply rax * reg -> rdx:rax."""
         self._rex(4, reg)
         self.byte(0xF7)
         self.modrm(3, 4, reg)
 
     def udiv_r(self, reg):
-        """unsigned divide rdx:rax by reg (quotient rax, remainder rdx)."""
         self._rex(6, reg)
         self.byte(0xF7)
         self.modrm(3, 6, reg)
 
     def bsr(self, dst, src):
-        """dst = index of highest set bit of src (src != 0)."""
         self._rex(dst, src)
         self.byte(0x0F, 0xBD)
         self.modrm(3, dst, src)
@@ -322,10 +281,7 @@ class Asm:
     def test_rr(self, a, b):
         self._alu_rr(0x85, a, b)
 
-    # -- setcc / movzx -----------------------------------------------------
-
     def setcc(self, op, reg8dst):
-        """set<cc> reg8; op is the full second byte (0x94 = sete, ...)."""
         if reg8dst >= 8:
             self.byte(0x41)
         self.byte(0x0F, op)
@@ -337,11 +293,8 @@ class Asm:
         self.modrm(3, dst, src)
 
     def set_bool(self, cc, tmp=RCX):
-        """rax = (flags <cc> 0) as 0/1 in a full register. cc: full opcode."""
         self.setcc(cc, tmp)
         self.movzx_r8(RAX, tmp)
-
-    # -- control flow -------------------------------------------------------
 
     def call(self, label):
         self.byte(0xE8)
@@ -360,7 +313,6 @@ class Asm:
         self.imm32(0)
 
     def jcc(self, cc, label):
-        """cc is the full low byte (0x84 = je, ...)."""
         self.byte(0x0F, cc)
         self.fixups.append((len(self.buf), label, "rel32"))
         self.imm32(0)
@@ -381,8 +333,6 @@ class Asm:
     def syscall(self):
         self.byte(0x0F, 0x05)
 
-    # -- SSE2 float --------------------------------------------------------
-
     def _sse(self, prefix, op, src_xmm, dst_xmm):
         rex = 0x40 | (REX_R if dst_xmm >= 8 else 0) | (REX_B if src_xmm >= 8 else 0)
         if rex != 0x40:
@@ -391,10 +341,10 @@ class Asm:
         self.modrm(3, dst_xmm, src_xmm)
 
     def movsd_rr(self, dst, src):
-        self._sse(0xF2, 0x10, src, dst)     # movsd dst, src (reg,reg form)
+        self._sse(0xF2, 0x10, src, dst)
 
     def movsd_rm(self, dst, base, disp):
-        self.byte(0xF2)                 # legacy prefix precedes REX
+        self.byte(0xF2)
         self._sse_mem_rex(base, dst)
         self.byte(0x0F, 0x10)
         self._mem_modrm(base, disp, dst)
@@ -447,19 +397,16 @@ class Asm:
         self.modrm(3, gpr_dst, xmm_src)
 
     def movq_gx(self, gpr_dst, xmm_src):
-        """gpr = bits of xmm (movq r64, xmm)."""
         rex = REX_W | (REX_R if xmm_src >= 8 else 0) | (REX_B if gpr_dst >= 8 else 0)
         self.byte(0x66, rex, 0x0F, 0x7E)
         self.modrm(3, xmm_src, gpr_dst)
 
     def movq_xg(self, xmm_dst, gpr_src):
-        """xmm = bits from gpr (movq xmm, r64)."""
         rex = REX_W | (REX_R if xmm_dst >= 8 else 0) | (REX_B if gpr_src >= 8 else 0)
         self.byte(0x66, rex, 0x0F, 0x6E)
         self.modrm(3, xmm_dst, gpr_src)
 
     def roundsd(self, dst, src, mode):
-        """mode: 0=nearest-even 1=down 2=up 3=toward-zero (SSE4.1)."""
         rex = 0x40 | (REX_R if dst >= 8 else 0) | (REX_B if src >= 8 else 0)
         if rex != 0x40:
             self.byte(rex)
@@ -467,10 +414,7 @@ class Asm:
         self.modrm(3, dst, src)
         self.byte(mode & 0x07)
 
-    # -- fixup resolution ---------------------------------------------------
-
     def resolve(self, base_addr=0):
-        """Patch every fixup. Returns final bytes."""
         for pos, label, kind in self.fixups:
             target = self.labels[label]
             if target is None:
@@ -479,7 +423,7 @@ class Asm:
                 rel = (base_addr + target) - (base_addr + pos + 4)
                 for i in range(4):
                     self.buf[pos + i] = (rel >> (8 * i)) & 0xFF
-            else:  # abs64
+            else:
                 addr = base_addr + target
                 for i in range(8):
                     self.buf[pos + i] = (addr >> (8 * i)) & 0xFF

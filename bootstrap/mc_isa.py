@@ -1,29 +1,7 @@
 #!/usr/bin/env python3
-"""Architecture-neutral instruction DSL for the Mandela native backend (v0.6).
-
-The lowering pass (native.py) and the runtime (mc_rt.py) emit a small list of
-architecture-neutral ops; two translators turn them into raw x86-64 (System V
-AMD64) or ARM64 (AAPCS64) machine code using the mc_x64/mc_a64 encoders.
-
-Abstract registers:
-  R0..R13   64-bit scratch registers (caller-saved on both architectures)
-  F0..F7    64-bit float registers (xmm0-7 / d0-7)
-  SP        stack pointer, FREG   frame base register
-  A0..A5    integer-class argument registers (ABI), RET/RET2 result registers
-  SYSNO     register holding the Linux syscall number
-
-Values are passed to functions in A0..; a (ptr, len) pair is returned in
-RET,RET2 (rax,rdx on x86-64 / x0,x1 on ARM64).
-
-Float comparisons ("lt","le","gt","ge","eq","ne") are NaN-safe: a comparison
-involving NaN yields false, except "ne" which yields true (IEEE semantics,
-matching the interpreter and the C backend).
-"""
 
 import mc_x64
 import mc_a64
-
-# -- register maps -----------------------------------------------------------
 
 X64_R = {"R0": mc_x64.RAX, "R1": mc_x64.RCX, "R2": mc_x64.RDX, "R3": mc_x64.RSI,
          "R4": mc_x64.RDI, "R5": mc_x64.R8, "R6": mc_x64.R9, "R7": mc_x64.R10,
@@ -33,14 +11,13 @@ X64_F = {"F%d" % i: i for i in range(8)}
 A64_R = {"R%d" % i: i for i in range(14)}
 A64_F = {"F%d" % i: i for i in range(8)}
 
-# ABI aliases per architecture
 X64_ABI = {"A0": "R4", "A1": "R3", "A2": "R2", "A3": "R1", "A4": "R5",
            "A5": "R6", "RET": "R0", "RET2": "R2", "SYSNO": "R0"}
 A64_ABI = {"A%d" % i: "R%d" % i for i in range(6)}
 A64_ABI.update({"RET": "R0", "RET2": "R1", "SYSNO": "R8"})
 
-X64_ARG_I = ["A0", "A1", "A2", "A3", "A4", "A5"]          # rdi rsi rdx rcx r8 r9
-A64_ARG_I = ["A%d" % i for i in range(8)]                  # x0-x7
+X64_ARG_I = ["A0", "A1", "A2", "A3", "A4", "A5"]
+A64_ARG_I = ["A%d" % i for i in range(8)]
 X64_ARG_F = ["F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7"]
 A64_ARG_F = ["F0", "F1", "F2", "F3", "F4", "F5", "F6", "F7"]
 
@@ -58,10 +35,8 @@ A64_CC = {"e": mc_a64.EQ, "ne": mc_a64.NE, "l": mc_a64.LT, "le": mc_a64.LE,
           "a": mc_a64.HI, "ae": mc_a64.CS, "vs": mc_a64.VS, "vc": mc_a64.VC,
           "mi": mc_a64.MI, "pl": mc_a64.PL}
 
-
 class LoweringError(Exception):
     pass
-
 
 def _xreg(name):
     name = X64_ABI.get(name, name)
@@ -73,7 +48,6 @@ def _xreg(name):
         return X64_R[name]
     raise LoweringError("unknown x86-64 register %r" % name)
 
-
 def _areg(name):
     name = A64_ABI.get(name, name)
     if name == "SP":
@@ -84,16 +58,10 @@ def _areg(name):
         return A64_R[name]
     raise LoweringError("unknown ARM64 register %r" % name)
 
-
 def _uniq(a):
     n = getattr(a, "_uniq", 0) + 1
     a._uniq = n
     return "..u%d" % n
-
-
-# ---------------------------------------------------------------------------
-# x86-64 translator
-# ---------------------------------------------------------------------------
 
 def emit_x64(a, op):
     k = op[0]
@@ -115,7 +83,7 @@ def emit_x64(a, op):
     elif k == "load":
         d, b = _xreg(op[1]), _xreg(op[2])
         if b == mc_x64.RSP:
-            # [rsp+disp] needs a SIB byte; bounce the address through d
+
             a.mov_rr(d, mc_x64.RSP)
             a.mov_rm(d, d, op[3])
         else:
@@ -156,11 +124,11 @@ def emit_x64(a, op):
         else:
             s2 = _xreg(op[3])
             if d == s2 and d != s1:
-                # dst coincides with the second source: rearrange safely
+
                 if comm:
                     {"add": a.add_rr, "and": a.and_rr, "or": a.or_rr,
                      "xor": a.xor_rr, "mul": a.imul_rr}[k](d, s1)
-                else:  # sub: d = s1 - d  =>  -d + s1
+                else:
                     a.neg_r(d)
                     a.add_rr(d, s1)
             else:
@@ -188,7 +156,7 @@ def emit_x64(a, op):
     elif k in ("div", "rem"):
         ra, rb = _xreg(op[2]), _xreg(op[3])
         if rb == mc_x64.RDX:
-            a.mov_rr(mc_x64.R11, rb)    # rdx is clobbered by cqo
+            a.mov_rr(mc_x64.R11, rb)
             rb = mc_x64.R11
         if ra != mc_x64.RAX:
             a.mov_rr(mc_x64.RAX, ra)
@@ -222,40 +190,36 @@ def emit_x64(a, op):
     elif k == "ret":
         a.ret()
     elif k == "udivmod":
-        # unsigned divide: rq = ra / rb, rr = ra % rb (rb != 0)
-        # rdx holds the remainder afterwards; restore the divisor register
-        # if the caller keeps it there.
+
         ra, rb_orig = _xreg(op[3]), _xreg(op[4])
         rb = rb_orig
         if rb == mc_x64.RDX:
-            a.mov_rr(mc_x64.R11, rb)    # rdx is clobbered below
+            a.mov_rr(mc_x64.R11, rb)
             rb = mc_x64.R11
         if ra != mc_x64.RAX:
             a.mov_rr(mc_x64.RAX, ra)
         a.xor_rr(mc_x64.RDX, mc_x64.RDX)
         a.udiv_r(rb)
         rq, rr = _xreg(op[1]), _xreg(op[2])
-        if rq == mc_x64.RDX:
-            # the quotient destination IS rdx: pull the remainder out of
-            # rdx BEFORE overwriting it with the quotient
-            if rr != mc_x64.RDX:
-                a.mov_rr(rr, mc_x64.RDX)
-            if rq != mc_x64.RAX:
-                a.mov_rr(rq, mc_x64.RAX)
+        rr_done = False
+        if rr != mc_x64.RDX and rq == mc_x64.RDX:
+            a.mov_rr(rr, mc_x64.RDX)
+            rr_done = True
+        if rq != mc_x64.RAX:
+            a.mov_rr(rq, mc_x64.RAX)
+        if rr_done:
+            pass
+        elif rr != mc_x64.RDX:
+            a.mov_rr(rr, mc_x64.RDX)
         else:
-            if rq != mc_x64.RAX:
-                a.mov_rr(rq, mc_x64.RAX)
-            if rr != mc_x64.RDX:
-                a.mov_rr(rr, mc_x64.RDX)
-            else:
-                a.mov_rr(mc_x64.R11, mc_x64.RDX)   # keep rem, free r11
+            a.mov_rr(mc_x64.R11, mc_x64.RDX)
         if rb_orig == mc_x64.RDX and rq != mc_x64.RDX and rr != mc_x64.RDX:
-            a.mov_rr(mc_x64.RDX, mc_x64.R11)   # restore divisor
+            a.mov_rr(mc_x64.RDX, mc_x64.R11)
     elif k == "msb":
-        # rd = index of the highest set bit of rs (rs must be nonzero)
+
         a.bsr(_xreg(op[1]), _xreg(op[2]))
     elif k == "mulu128":
-        # (hi, lo) = ra * rb (unsigned 64x64 -> 128)
+
         ra, rb = _xreg(op[3]), _xreg(op[4])
         if ra != mc_x64.RAX:
             a.mov_rr(mc_x64.RAX, ra)
@@ -268,10 +232,11 @@ def emit_x64(a, op):
     elif k == "fset":
         a.mov_addr(mc_x64.R10, op[2])
         a.movsd_rm(X64_F[op[1]], mc_x64.R10, 0)
+    elif k == "fmov":
+        a.movsd_rr(X64_F[op[1]], X64_F[op[2]])
     elif k == "fload":
         b = _xreg(op[2])
         if b == mc_x64.RSP:
-            # [rsp+disp] needs a SIB byte; bounce the address through r10
             a.mov_rr(mc_x64.R10, mc_x64.RSP)
             a.movsd_rm(X64_F[op[1]], mc_x64.R10, op[3])
         else:
@@ -283,25 +248,12 @@ def emit_x64(a, op):
             a.movsd_mr(mc_x64.R10, op[3], X64_F[op[1]])
         else:
             a.movsd_mr(b, op[3], X64_F[op[1]])
-    elif k == "fmov":
-        a.movsd_rr(X64_F[op[1]], X64_F[op[2]])
     elif k in ("fadd", "fsub", "fmul", "fdiv"):
         d, s2 = X64_F[op[1]], X64_F[op[3]]
-        lhs = X64_F[op[2]]
-        fn = {"fadd": a.addsd, "fsub": a.subsd,
-              "fmul": a.mulsd, "fdiv": a.divsd}[k]
-        if d != lhs:
-            if d == s2:
-                # dst currently holds the RIGHT operand (x86 two-operand
-                # form): stash it, load the left operand, apply
-                a.movsd_rr(X64_F["F7"], d)
-                a.movsd_rr(d, lhs)
-                fn(d, X64_F["F7"])
-            else:
-                a.movsd_rr(d, lhs)
-                fn(d, s2)
-        else:
-            fn(d, s2)
+        if d != X64_F[op[2]]:
+            a.movsd_rr(d, X64_F[op[2]])
+        {"fadd": a.addsd, "fsub": a.subsd,
+         "fmul": a.mulsd, "fdiv": a.divsd}[k](d, s2)
     elif k in ("fneg", "fabs", "fneg_f", "fabs_f"):
         d, s = X64_F[op[1]], X64_F[op[2]]
         neg = k in ("fneg", "fneg_f")
@@ -317,33 +269,33 @@ def emit_x64(a, op):
             a.movsd_rr(d, s)
         a.roundsd(d, d, 1 if k == "ffloor" else 2 if k == "fceil" else 3)
     elif k == "fround":
-        # round half away from zero (C round()): t=trunc(x); |x-t|>=0.5 -> t+sign
+
         d, s = X64_F[op[1]], X64_F[op[2]]
         done = _uniq(a) + "d"
         addit = _uniq(a) + "a"
         a.movsd_rr(X64_F[5], s)
         if d != s:
             a.movsd_rr(d, s)
-        a.roundsd(d, d, 3)                    # d = trunc(x)
-        a.movsd_rr(X64_F[6], d)               # F6 = t
-        a.subsd(X64_F[5], X64_F[6])           # F5 = x - t
+        a.roundsd(d, d, 3)
+        a.movsd_rr(X64_F[6], d)
+        a.subsd(X64_F[5], X64_F[6])
         a.mov_addr(mc_x64.R10, "fcm_abs")
         a.movsd_rm(X64_F[7], mc_x64.R10, 0)
-        a.andpd(X64_F[5], X64_F[7])           # |x - t|
+        a.andpd(X64_F[5], X64_F[7])
         a.mov_addr(mc_x64.R10, "fcm_half")
         a.movsd_rm(X64_F[7], mc_x64.R10, 0)
         a.ucomisd(X64_F[5], X64_F[7])
-        a.jcc(X64_JC["be"], done)             # NaN (unordered) also falls here
+        a.jcc(X64_JC["be"], done)
         a.movq_gx(mc_x64.R10, s)
         a.shr_ir(mc_x64.R10, 63)
         a.test_rr(mc_x64.R10, mc_x64.R10)
         a.mov_addr(mc_x64.RCX, "fcm_none")
-        a.movsd_rm(X64_F[5], mc_x64.RCX, 0)   # F5 = -1.0
+        a.movsd_rm(X64_F[5], mc_x64.RCX, 0)
         a.jcc(X64_JC["e"], addit)
         a.mov_addr(mc_x64.RCX, "fcm_one")
-        a.movsd_rm(X64_F[5], mc_x64.RCX, 0)   # F5 = +1.0
+        a.movsd_rm(X64_F[5], mc_x64.RCX, 0)
         a.label(addit)
-        a.addsd(d, X64_F[5])                  # t + sign
+        a.addsd(d, X64_F[5])
         a.label(done)
     elif k == "fsqrt":
         d, s = X64_F[op[1]], X64_F[op[2]]
@@ -361,8 +313,8 @@ def emit_x64(a, op):
     elif k == "fj":
         fa, fb, cc, lbl = X64_F[op[1]], X64_F[op[2]], op[3], op[4]
         if cc == "eq":
-            # unordered (NaN) counts as not-equal; helper emits jp/je pair
-            _uniq_done(a, lbl, "eq")
+            a.ucomisd(fa, fb)
+            a.jcc(X64_JC["p"], _uniq_done(a, lbl, "eq"))
         elif cc == "ne":
             a.ucomisd(fa, fb)
             a.jcc(X64_JC["p"], lbl)
@@ -421,39 +373,32 @@ def emit_x64(a, op):
     elif k == "pop_rbp":
         a.pop_r(mc_x64.RBP)
     elif k == "store_lr" or k == "load_lr":
-        pass                            # x86 saves rbp via push/pop
+        pass
     elif k == "subsp":
         a.sub_ir(mc_x64.RSP, op[1])
     elif k == "addsp":
         a.add_ir(mc_x64.RSP, op[1])
     elif k == "spaddr":
-        # r = SP + disp (buffer addressing inside runtime frames)
+
         a.mov_rr(_xreg(op[1]), mc_x64.RSP)
         if op[2]:
             a.add_ir(_xreg(op[1]), op[2])
     elif k == "sysno":
         a.mov_ir(mc_x64.RAX, {"write": 1, "exit": 231, "mmap": 9}[op[1]])
     elif k == "syscall":
-        a.mov_rr(mc_x64.R10, mc_x64.RCX)   # Linux: arg4 travels in r10
+        a.mov_rr(mc_x64.R10, mc_x64.RCX)
         a.syscall()
     elif k == "int3":
         a.byte(0xCC)
     else:
         raise LoweringError("unknown x86-64 op %r" % (op,))
 
-
 def _uniq_done(a, lbl, tag):
-    """float eq branch helper: emit jp-not + je; returns label name used."""
     notl = _uniq(a) + tag
-    a.jcc(X64_JC["p"], notl)     # unordered -> not equal
+    a.jcc(X64_JC["p"], notl)
     a.jcc(X64_JC["e"], lbl)
     a.label(notl)
     return notl
-
-
-# ---------------------------------------------------------------------------
-# ARM64 translator
-# ---------------------------------------------------------------------------
 
 def emit_a64(a, op):
     k = op[0]
@@ -469,13 +414,13 @@ def emit_a64(a, op):
     elif k == "mov":
         d, sv = _areg(op[1]), _areg(op[2])
         if op[2] == "SP" and op[1] != "SP":
-            a.add_imm(d, 31, 0)         # mov xd, sp
+            a.add_imm(d, 31, 0)
         elif op[1] == "SP" and op[2] != "SP":
-            a.add_imm(31, sv, 0)        # mov sp, xs
+            a.add_imm(31, sv, 0)
         elif d != sv:
             a.mov_rr(d, sv)
     elif k == "addr":
-        # adr is PC-relative (+-1MB); the whole code+data image is far smaller.
+
         a.adr(_areg(op[1]), op[2])
     elif k == "load":
         a.mov_rm(_areg(op[1]), _areg(op[2]), op[3])
@@ -514,8 +459,8 @@ def emit_a64(a, op):
         a.sdiv(_areg(op[1]), _areg(op[2]), _areg(op[3]))
     elif k == "rem":
         ra, rb, d = _areg(op[2]), _areg(op[3]), _areg(op[1])
-        a.sdiv(12, ra, rb)                    # x12 = ra / rb
-        a.msub(d, 12, rb, ra)                 # d = ra - x12*rb
+        a.sdiv(12, ra, rb)
+        a.msub(d, 12, rb, ra)
     elif k in ("cset", "cseti"):
         d = _areg(op[1])
         if k == "cset":
@@ -561,10 +506,6 @@ def emit_a64(a, op):
     elif k == "fset":
         a.adr(_areg("R9"), op[2])
         a.fmov_rm(A64_F[op[1]], _areg("R9"), 0)
-    elif k == "fload":
-        a.fmov_rm(A64_F[op[1]], _areg(op[2]), op[3])
-    elif k == "fstore":
-        a.fmov_mr(_areg(op[2]), op[3], A64_F[op[1]])
     elif k == "fmov":
         a.fmov_rr(A64_F[op[1]], A64_F[op[2]])
     elif k in ("fadd", "fsub", "fmul", "fdiv"):
@@ -593,12 +534,12 @@ def emit_a64(a, op):
         a.fmov_gx(A64_F[op[1]], _areg(op[2]))
     elif k == "fj":
         fa, fb, cc, lbl = A64_F[op[1]], A64_F[op[2]], op[3], op[4]
-        # fcmp(x,y): lt -> N=1; ge -> N==V (NaN-safe alone); unordered V=1
+
         if cc == "eq":
             a.fcmp(fa, fb)
             okl = _uniq(a) + "e"
             a.bcond(A64_CC["eq"], okl)
-            a.bcond(A64_CC["vc"], lbl)        # ordered -> not equal
+            a.bcond(A64_CC["vc"], lbl)
             a.label(okl)
         elif cc == "ne":
             a.fcmp(fa, fb)
@@ -608,12 +549,12 @@ def emit_a64(a, op):
             a.fcmp(fa, fb)
             a.bcond(mc_a64.MI, lbl)
         elif cc == "le":
-            a.fcmp(fb, fa)                    # a<=b  <=>  b>=a
+            a.fcmp(fb, fa)
             a.bcond(A64_CC["ge"], lbl)
         elif cc == "gt":
-            a.fcmp(fb, fa)                    # a>b   <=>  b<a
+            a.fcmp(fb, fa)
             a.bcond(A64_CC["gt"], lbl)
-        else:  # ge
+        else:
             a.fcmp(fa, fb)
             a.bcond(A64_CC["ge"], lbl)
     elif k == "fcset":
@@ -638,14 +579,14 @@ def emit_a64(a, op):
         elif cc == "gt":
             a.fcmp(fb, fa)
             a.cset(d, A64_CC["gt"])
-        else:  # ge
+        else:
             a.fcmp(fa, fb)
             a.cset(d, A64_CC["ge"])
     elif k == "fjisnan":
         a.fcmp(A64_F[op[1]], A64_F[op[1]])
         a.bcond(A64_CC["vs"], op[2])
     elif k == "push_rbp" or k == "pop_rbp":
-        pass                            # ARM64 saves x30 in the frame instead
+        pass
     elif k == "store_lr":
         a.mov_mr(mc_a64.FP, op[1], mc_a64.LR)
     elif k == "load_lr":
@@ -663,7 +604,7 @@ def emit_a64(a, op):
             a.mov_ir(13, op[1])
             a.add_sp_reg(13)
     elif k == "spaddr":
-        # r = SP + disp (disp < 4096)
+
         if op[2]:
             a.add_imm(_areg(op[1]), 31, op[2])
         else:

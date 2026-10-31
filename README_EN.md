@@ -11,8 +11,8 @@ The Mandela compiler is written in Mandela itself.
 English | [Русский](README.md)
 
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![Stage](https://img.shields.io/badge/stage-v0.6%20machine%20code%20backend-orange.svg)]()
-[![Tests](https://img.shields.io/badge/tests-96%20passing-brightgreen.svg)](tests/run_tests.sh)
+[![Stage](https://img.shields.io/badge/stage-v0.5%20floating%20point-orange.svg)]()
+[![Tests](https://img.shields.io/badge/tests-81%20passing-brightgreen.svg)](tests/run_tests.sh)
 
 </div>
 
@@ -46,9 +46,8 @@ cd mandela
 ./hello
 ```
 
-No extra dependencies: the bootstrap engine and the machine-code backend
-ship with the repository. The C backend additionally needs a system compiler
-(`cc`, `gcc`, `clang`).
+No extra dependencies: the bootstrap engine ships with the repository. For
+`build` you additionally need any system compiler (`cc`, `gcc`, `clang`).
 
 ## Example
 
@@ -259,8 +258,7 @@ generates machine code on its own (see the roadmap).
 
 ```bash
 ./bin/mandela run file.mnd [args...]    # check and execute (interpreter)
-./bin/mandela build file.mnd [-o out]   # build a native binary (via C)
-./bin/mandela build file.mnd --backend native -o out   # pure machine code
+./bin/mandela build file.mnd [-o out]   # check and build a native binary
 ./bin/mandela build file.mnd --emit c   # dump the intermediate representation
 ./bin/mandela build file.mnd --emit asm # assembly listing
 ./bin/mandela check file.mnd            # strict check only
@@ -268,7 +266,7 @@ generates machine code on its own (see the roadmap).
 ./bin/mandela ast file.mnd              # AST dump as s-expressions (debug)
 ```
 
-## v0.6 features
+## v0.5 features
 
 - Static typing with inference: `let x = 5`, `let x = 2.5`, `list[int]`,
   `dict[str, int]`, `ptr[int]`, `ptr[Node]`
@@ -290,41 +288,35 @@ generates machine code on its own (see the roadmap).
 - Built-ins: `print len str int f64 chr ord push pop split substr read_file
   write_file args fatal exit range alloc arena_new arena_alloc arena_free
   ptr_len is_null abs sqrt floor ceil round pow`
-- Code generation: `--backend native` — a direct machine-code backend for
-  x86-64/ARM64 (instructions and the ELF image are emitted byte by byte — no C,
-  no assembler, no linker, no libc; scalars, functions, recursion, loops,
-  globals, print via write(2)); or the classic route through the system
-  toolchain with `--emit c|asm|bin`
+- Code generation: native binaries via the system toolchain, `--emit c|asm|bin`
 - Strict type checker with `E0xxx` diagnostics, unused-variable warnings
 
 ## Roadmap
 
 | Version | Plan |
 | --- | --- |
+| v0.6 | Direct machine-code backend (x86-64/ARM64) without an intermediate representation |
 | v0.7 | Modules instead of linear scripts, package manager |
 | v0.8 | Self-compilation: the Mandela compiler emits machine code for itself |
-| v0.9 | Composite types in the machine-code backend: lists, dicts, structs |
 
 ## Development
 
 ```bash
-make test        # 96 tests: positive, negative, panic and both-backend parity
+make test        # 81 tests: positive, negative, panic and native-build parity
 ```
 
-Every positive test runs three times: on the interpreter, through the C
-backend and through the machine-code backend — the output must match byte
-for byte. Panic tests verify the interpreter and the compiled binaries abort
-with the same message and exit code 101.
+Every positive test runs twice: on the interpreter and compiled — the output
+must match byte for byte. Panic tests verify the interpreter and the native
+binary abort with the same message and exit code 101.
 
 Repository layout:
 
 ```text
 bin/mandela          CLI
 bootstrap/mandela.py bootstrap engine (interpreter)
-bootstrap/codegen.py C code-generation backend
-bootstrap/mc_*.py    machine-code backend (x86-64/ARM64 encoders, ELF, runtime)
+bootstrap/codegen.py code generation backend
 src/*.mnd            the compiler, written in Mandela
-spec/SPEC.md         language specification v0.6
+spec/SPEC.md         language specification v0.5
 examples/            example programs
 tests/               positive, negative, panic and native tests
 ```

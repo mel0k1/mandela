@@ -4,14 +4,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOST="$ROOT/bootstrap/mandela.py"
 CODEGEN="$ROOT/bootstrap/codegen.py"
-NATIVE="$ROOT/bootstrap/native.py"
 SRCS=("$ROOT/src/err.mnd" "$ROOT/src/lexer.mnd" "$ROOT/src/parser.mnd" "$ROOT/src/checker.mnd" "$ROOT/src/main.mnd")
 
 usage() {
     echo "Mandela v0.6"
     echo "usage: mandela <run|check|build|lex|ast> <file.mnd> [args...]"
     echo "       mandela build <file.mnd> [-o out] [--emit c|asm|bin]"
-    echo "       mandela build <file.mnd> --backend native [-o out] [--arch x86-64|arm64]"
+    echo "       mandela build --backend native <file.mnd> [-o out] [--arch x86-64|arm64]"
 }
 
 cmd="${1:-}"
@@ -38,26 +37,21 @@ case "$cmd" in
         f="${1:-}"
         if [ -z "$f" ]; then usage; exit 1; fi
         shift
-        # strip "--backend native" (two words) or "--backend=native"
-        backend="c"
-        args=()
-        skip=0
-        for arg in "$@"; do
-            if [ "$skip" = "1" ]; then
-                skip=0
-                continue
-            fi
-            case "$arg" in
-                --backend=*) backend="${arg#--backend=}" ;;
-                --backend)   backend="native"; skip=1 ;;
-                *)           args+=("$arg") ;;
-            esac
-        done
         python3 "$HOST" "${SRCS[@]}" -- check "$f"
-        if [ "$backend" = "native" ]; then
-            exec python3 "$NATIVE" "$f" "${args[@]:-}"
-        fi
-        exec python3 "$CODEGEN" "$f" "${args[@]:-}"
+        case " $* " in
+            *" --backend native"*)
+                nargs=()
+                prev=""
+                for a in "$@"; do
+                    if [ "$prev" = "--backend" ]; then prev="$a"; continue; fi
+                    [ "$a" = "--backend" ] && { prev="$a"; continue; }
+                    nargs+=("$a")
+                    prev="$a"
+                done
+                exec python3 "$ROOT/bootstrap/native.py" "$f" "${nargs[@]}" ;;
+            *)
+                exec python3 "$CODEGEN" "$f" "$@" ;;
+        esac
         ;;
     *)
         usage

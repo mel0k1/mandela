@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""Mandela native backend (v0.6): machine code emission for x86-64/ARM64.
-
-`mandela build --backend native program.mnd` lowers the checked program
-straight to machine code — System V AMD64 or AAPCS64 — and wraps it into a
-statically linked ELF executable. Nothing but the Linux kernel is involved:
-no intermediate C, no assembler, no linker, no libc.
-
-Supported in v0.6: int/f64/bool/str/nil scalars, functions and recursion,
-globals, if/while/for (range and strings), break/continue and the builtins
-print, eprint, len, str, int, f64, chr, ord, abs, sqrt, floor, ceil, round,
-substr, exit, fatal. Composite types (lists, dicts, structs, pointers) and
-pow stay on the C backend; the native path rejects them with a compile
-error. Strings use byte semantics (same as the C backend).
-"""
 
 import os
 import struct
@@ -27,7 +13,6 @@ import mc_x64
 import mc_a64
 import mc_elf
 
-
 class NativeError(Exception):
     def __init__(self, msg, line=0, col=0):
         super().__init__(msg)
@@ -35,14 +20,11 @@ class NativeError(Exception):
         self.line = line
         self.col = col
 
-
 def where(n):
     if isinstance(n, list) and len(n) > 0 and isinstance(n[-1], int):
         return n[-1], n[-2] if isinstance(n[-2], int) else 0
     return 0, 0
 
-
-# (ptr, len) second return register per architecture
 STRRET2 = {"x86-64": "R2", "arm64": "R1"}
 ARGI = {"x86-64": mc_isa.X64_ARG_I, "arm64": mc_a64 and mc_isa.A64_ARG_I}
 ARGF = {"x86-64": mc_isa.X64_ARG_F, "arm64": mc_isa.A64_ARG_F}
@@ -61,7 +43,6 @@ UNSUPPORTED_EXPR = {
     "field": "field access",
 }
 
-
 def type_of_ann(ann, ln):
     if ann in ("int", "f64", "bool", "str", "nil", ""):
         return ann if ann else "nil"
@@ -69,23 +50,22 @@ def type_of_ann(ann, ln):
                       "(lists, dicts, structs and pointers stay on the C "
                       "backend in v0.6)" % ann, ln, 0)
 
-
 class Lowering:
     def __init__(self, arch):
         self.arch = arch
         self.ops = []
-        self.ro = {}                 # label -> bytes (rodata)
+        self.ro = {}
         self._rl = 0
         self.strret2 = STRRET2[arch]
         self.argi = mc_isa.X64_ARG_I if arch == "x86-64" else mc_isa.A64_ARG_I
         self.argf = mc_isa.X64_ARG_F if arch == "x86-64" else mc_isa.A64_ARG_F
         self.ni = INT_REGS_MAX[arch]
-        # program-level info
-        self.fns = {}                # name -> (param_types, ret_type)
-        self.globals = {}            # name -> (bss offset, type)
+
+        self.fns = {}
+        self.globals = {}
         self.gsize = 0
         self.scopes = [{}]
-        self.slot = 0                # next local slot (8 bytes each)
+        self.slot = 0
         self.maxslot = 0
         self.spill = 0
         self.maxspill = 0
@@ -93,9 +73,7 @@ class Lowering:
         self.epilogue = None
         self.fret = "nil"
         self._uniq = 0
-        self._fl = {}                # float literal bits -> label
-
-    # -- helpers ----------------------------------------------------------
+        self._fl = {}
 
     def uniq(self):
         self._uniq += 1
@@ -146,8 +124,6 @@ class Lowering:
             return self.globals[name]
         return None
 
-    # -- frame addressing (normalized: [FREG + 8*i]) -----------------------
-
     def ldslot(self, r, idx):
         self.emit("load", r, "FREG", 8 * idx)
 
@@ -160,22 +136,16 @@ class Lowering:
     def stfslot(self, f, idx):
         self.emit("fstore", f, "FREG", 8 * idx)
 
-    # -- spill area ---------------------------------------------------------
-
     def spill_alloc(self, n):
         base = self.maxslot + self.spill
         self.spill += n
         self.maxspill = max(self.maxspill, self.spill)
         return base
 
-    # -- panics ---------------------------------------------------------------
-
     def panic(self, label, ln_):
         self.emit("addr", "A0", label)
         self.emit("set", "A1", ln_)
         self.emit("jmp", "rt_panic")
-
-    # -- expressions -------------------------------------------------------
 
     def expr_type(self, n):
         tag = n[0]
@@ -350,9 +320,6 @@ class Lowering:
             self.expr_type_gate(n[2])
         elif tag == "var":
             self.expr_type(n)
-        # literals: fine
-
-    # -- expression codegen: result in R0 (+strret2 for str) or F0 ----------
 
     def gen_expr(self, n):
         tag = n[0]
@@ -423,12 +390,12 @@ class Lowering:
         if tag == "index":
             entry = self.spill
             bt = self.expr_type(n[1])
-            self.gen_expr(n[1])            # R0 ptr, strret2 len
+            self.gen_expr(n[1])
             sb = self.spill_alloc(2)
             self.stslot("R0", sb)
             self.stslot(self.strret2, sb + 1)
             self.spill = sb + 2
-            self.gen_expr(n[2])            # R0 index
+            self.gen_expr(n[2])
             self.emit("mov", "A2", "R0")
             self.ldslot("A0", sb)
             self.ldslot("A1", sb + 1)
@@ -474,7 +441,7 @@ class Lowering:
         self.stslot(self.strret2, sb + 1)
         self.spill = sb + 2
         self.gen_expr(n[3])
-        # len must be moved before the pointer: A2 aliases strret2 on x86-64
+
         self.emit("mov", "A3", self.strret2)
         self.emit("mov", "A2", "R0")
         self.ldslot("A0", sb)
@@ -487,11 +454,11 @@ class Lowering:
 
     def gen_ibin(self, n, op, ln):
         entry = self.spill
-        self.gen_expr(n[2])                # lhs -> R0
+        self.gen_expr(n[2])
         sb = self.spill_alloc(1)
         self.stslot("R0", sb)
         self.spill = sb + 1
-        self.gen_expr(n[3])                # rhs -> R0
+        self.gen_expr(n[3])
         self.emit("mov", "R1", "R0")
         self.ldslot("R0", sb)
         self.spill = entry
@@ -522,7 +489,7 @@ class Lowering:
                 self.emit("cji", "R1", -1, "ne", dodiv)
                 self.emit("set64", "R2", 0x8000000000000000)
                 self.emit("cj", "R0", "R2", "ne", dodiv)
-                self.emit("neg", "R0", "R0")      # INT64_MIN / -1 wraps
+                self.emit("neg", "R0", "R0")
                 self.emit("jmp", done)
                 self.L(dodiv)
                 self.emit("div", "R0", "R0", "R1")
@@ -531,7 +498,7 @@ class Lowering:
                 rem1 = self.uniq() + "r1"
                 done = self.uniq() + "dn"
                 self.emit("cji", "R1", -1, "ne", rem1)
-                self.emit("set", "R0", 0)         # x % -1 == 0
+                self.emit("set", "R0", 0)
                 self.emit("jmp", done)
                 self.L(rem1)
                 self.emit("rem", "R0", "R0", "R1")
@@ -540,11 +507,11 @@ class Lowering:
 
     def gen_fbin(self, n, op, ln):
         entry = self.spill
-        self.gen_expr(n[2])                # lhs -> F0
+        self.gen_expr(n[2])
         sb = self.spill_alloc(1)
         self.emit("fstore", "F0", "FREG", 8 * sb)
         self.spill = sb + 1
-        self.gen_expr(n[3])                # rhs -> F0
+        self.gen_expr(n[3])
         self.emit("fload", "F1", "FREG", 8 * sb)
         self.spill = entry
         if op in ("==", "!=", "<", "<=", ">", ">="):
@@ -564,19 +531,23 @@ class Lowering:
         name = f[1]
         args = n[2]
         ln = n[-1] if isinstance(n[-1], int) else 0
-        # ---- builtins ----
+
         if name in ("print", "eprint"):
             if len(args) != 1:
                 raise NativeError("%s() takes exactly 1 argument" % name, ln)
             fd = 1 if name == "print" else 2
             ty = self.gen_expr(args[0])
+            if ty == "f64":
+                raise NativeError("print of f64 is not supported by the "
+                                  "native backend yet; use the C backend",
+                                  ln)
             self.emit("set", "A0", fd)
             if ty == "f64":
                 self.emit("call", "rt_print_f64")
             elif ty == "str":
                 self.emit("mov", "A2", self.strret2)
                 self.emit("mov", "A1", "R0")
-                self.emit("call", "rt_print_str")  # A2==strret2 on x86: no-op
+                self.emit("call", "rt_print_str")
 
             elif ty == "bool":
                 self.emit("mov", "A1", "R0")
@@ -693,7 +664,7 @@ class Lowering:
             return "f64"
         if name == "substr":
             entry = self.spill
-            self.gen_expr(args[0])     # str
+            self.gen_expr(args[0])
             sb = self.spill_alloc(2)
             self.stslot("R0", sb)
             self.stslot(self.strret2, sb + 1)
@@ -722,7 +693,7 @@ class Lowering:
             return "nil"
         if name == "range":
             raise NativeError("`range` is only allowed in `for` loops", ln)
-        # ---- user function ----
+
         if name not in self.fns:
             raise NativeError("native backend: unknown function `%s`" % name,
                               ln)
@@ -731,7 +702,7 @@ class Lowering:
             raise NativeError("native backend: `%s` takes %d arguments but "
                               "%d were given" % (name, len(ptypes),
                                                  len(args)), ln)
-        # evaluate args left-to-right into staging slots
+
         entry = self.spill
         staging = []
         istk = 0
@@ -754,7 +725,7 @@ class Lowering:
                 self.stslot("R0", base)
                 staging.append(("i", base))
                 istk += 1
-        # load ABI registers
+
         ireg = 0
         freg = 0
         stack_args = []
@@ -792,8 +763,7 @@ class Lowering:
                     if kind == "s":
                         self.ldslot("R2", base + 1)
                         self.emit("store", "R2", "SP", i * 8 + 8)
-                        # len goes into the NEXT stack slot; adjust layout:
-                        # (ptr, len) pairs occupy two slots
+
                     self.emit("store", "R8", "SP", i * 8)
         self.emit("call", "fn_" + name)
         if nstack:
@@ -807,8 +777,6 @@ class Lowering:
             return "str"
         self.emit("mov", "R0", "RET")
         return ret
-
-    # -- statements -----------------------------------------------------------
 
     def gen_stmt(self, n, top=False):
         tag = n[0]
@@ -911,32 +879,31 @@ class Lowering:
             args = it[2]
             self.newscope()
             idx = self.declare(name, "int")
-            # loop control lives in dedicated slots (outside the spill
-            # arena): the body may reset and reuse spill freely
+
             sb = self.slot
             self.slot += 3
             self.maxslot = max(self.maxslot, self.slot)
             if len(args) == 1:
                 self.gen_expr(args[0])
-                self.stslot("R0", sb + 1)          # end
+                self.stslot("R0", sb + 1)
                 self.emit("set", "R0", 0)
-                self.stslot("R0", sb)              # start
+                self.stslot("R0", sb)
                 self.emit("set", "R0", 1)
-                self.stslot("R0", sb + 2)          # step
+                self.stslot("R0", sb + 2)
             elif len(args) == 2:
                 self.gen_expr(args[0])
-                self.stslot("R0", sb)              # start
+                self.stslot("R0", sb)
                 self.gen_expr(args[1])
-                self.stslot("R0", sb + 1)          # end
+                self.stslot("R0", sb + 1)
                 self.emit("set", "R0", 1)
-                self.stslot("R0", sb + 2)          # step
+                self.stslot("R0", sb + 2)
             else:
                 self.gen_expr(args[0])
-                self.stslot("R0", sb)              # start
+                self.stslot("R0", sb)
                 self.gen_expr(args[1])
-                self.stslot("R0", sb + 1)          # end
+                self.stslot("R0", sb + 1)
                 self.gen_expr(args[2])
-                self.stslot("R0", sb + 2)          # step
+                self.stslot("R0", sb + 2)
                 z = self.uniq() + "z"
                 self.ldslot("R0", sb + 2)
                 self.emit("cji", "R0", 0, "ne", z)
@@ -946,7 +913,7 @@ class Lowering:
                 self.emit("jmp", "rt_panic")
                 self.L(z)
             self.emit("set", "R0", 0)
-            # i = start
+
             self.ldslot("R0", sb)
             self.stslot("R0", idx)
             cond_l = self.uniq() + "fc"
@@ -954,14 +921,14 @@ class Lowering:
             end_l = self.uniq() + "fe"
             self.L(cond_l)
             self.ldslot("R0", idx)
-            self.ldslot("R1", sb + 1)              # end
-            self.ldslot("R2", sb + 2)              # step
+            self.ldslot("R1", sb + 1)
+            self.ldslot("R2", sb + 2)
             sld = self.uniq() + "s"
-            self.emit("cji", "R2", 0, "le", sld)   # step <= 0 -> negative path
-            self.emit("cj", "R0", "R1", "ge", end_l)   # step > 0: exit i >= end
+            self.emit("cji", "R2", 0, "le", sld)
+            self.emit("cj", "R0", "R1", "ge", end_l)
             self.emit("jmp", body_l)
             self.L(sld)
-            self.emit("cj", "R0", "R1", "le", end_l)   # step < 0: exit i <= end
+            self.emit("cj", "R0", "R1", "le", end_l)
             self.L(body_l)
             self.loopstack.append((end_l, cond_l))
             for s in body:
@@ -975,7 +942,7 @@ class Lowering:
             self.L(end_l)
             self.endscope()
             return
-        # for c in str
+
         ty = self.expr_type(it)
         if ty != "str":
             raise NativeError("native backend: `for` over `str` only in "
@@ -984,10 +951,10 @@ class Lowering:
         sb = self.slot
         self.slot += 3
         self.maxslot = max(self.maxslot, self.slot)
-        self.stslot("R0", sb)                      # ptr
-        self.stslot(self.strret2, sb + 1)          # len
+        self.stslot("R0", sb)
+        self.stslot(self.strret2, sb + 1)
         self.emit("set", "R0", 0)
-        self.stslot("R0", sb + 2)                  # i
+        self.stslot("R0", sb + 2)
         self.newscope()
         idx = self.declare(name, "str")
         cond_l = self.uniq() + "sc"
@@ -1015,12 +982,10 @@ class Lowering:
         self.L(end_l)
         self.endscope()
 
-    # -- functions ---------------------------------------------------------
-
     def gen_fn(self, n):
         name, params, body = n[1], n[2], n[4]
         ptypes = self.fns[name][0]
-        # pass 1: generate the body into a temp list to learn the frame size
+
         saved_ops = self.ops
         self.ops = []
         self.slot = 0
@@ -1050,7 +1015,7 @@ class Lowering:
         self.endscope()
         body_ops = self.ops
         fbytes = self.frame_bytes()
-        # pass 2: prologue + body + epilogue in the real stream
+
         self.ops = saved_ops
         self.L("fn_" + name)
         self.emit_prologue(fbytes)
@@ -1092,17 +1057,14 @@ class Lowering:
             self.emit("addsp", fbytes + 16)
             self.emit("ret")
 
-    # -- top level -----------------------------------------------------------
-
     def program(self, ast):
         items = ast[1]
-        # pre-collect every function signature (bodies may forward-call)
+
         for it in items:
             if it[0] == "def":
                 pts = [type_of_ann(p[1], 0) for p in it[2]]
                 self.fns[it[1]] = (pts, type_of_ann(it[3], 0))
-        # feature gates (run in a throwaway scope stack so gate-time
-        # declarations cannot leak into the code generation phase)
+
         saved_scopes = self.scopes
         self.scopes = [{}]
         try:
@@ -1110,7 +1072,7 @@ class Lowering:
                 self.gate(it)
         finally:
             self.scopes = saved_scopes
-        # globals (bss slots inside the `mnd_g` block)
+
         goff = 0
         for it in items:
             if it[0] == "let":
@@ -1119,17 +1081,17 @@ class Lowering:
                 self.globals[it[1]] = (goff, ty, True)
                 goff += n * 8
         self.gsize = goff
-        # _start
+
         self.L("_start")
         self.emit("call", "rt_init")
         self.emit("call", "mandela_main")
         self.emit("set", "A0", 0)
         self.emit("call", "rt_exit")
-        # functions
+
         for it in items:
             if it[0] == "def":
                 self.gen_fn(it)
-        # mandela_main: top-level statements write globals via mnd_g
+
         saved_ops = self.ops
         self.ops = []
         self.slot = 0
@@ -1165,7 +1127,6 @@ class Lowering:
             self.ops.append(op)
         self.emit_epilogue(fbytes)
 
-
 def main():
     argv = sys.argv[1:]
     src = None
@@ -1183,10 +1144,6 @@ def main():
         elif a.startswith("--arch="):
             arch = a[7:]
             i += 1
-        elif a == "--backend":
-            i += 2              # skip the flag and its value word
-        elif a in ("--backend=native", "--backend=c"):
-            i += 1              # accepted for CLI symmetry
         elif a in ("-h", "--help"):
             usage()
         elif src is None:
@@ -1232,7 +1189,6 @@ def main():
             sys.stderr.write("  --> %s:%d:0\n" % (src, e.line))
         sys.exit(1)
 
-    # ---- assemble: runtime + user code + rodata ----
     rt_ops, rt_ro = mc_rt.gen_runtime()
     ops = rt_ops + lw.ops
     ro = dict(rt_ro)
@@ -1249,7 +1205,6 @@ def main():
             mc_isa.emit_a64(a, op)
         machine = mc_elf.EM_AARCH64
 
-    # rodata after code, 8-aligned; record label positions
     while len(a.buf) % 8:
         a.byte(0)
     for lbl in sorted(ro):
@@ -1260,10 +1215,9 @@ def main():
         raise SystemExit("internal: no _start")
 
     text_base = mc_elf.BASE + 64 + 2 * 56
-    # must match mc_elf.build_elf: rw segment starts at the next page after
-    # the whole text image (code + rodata + ELF headers)
+
     rw_vaddr = mc_elf.BASE + ((len(a.buf) + 64 + 2 * 56 + 4095) // 4096) * 4096
-    # rt_data needs 72 bytes (B_FD sits at +64); globals follow, 16-aligned
+
     bss_abs = {"rt_data": rw_vaddr, "mnd_g": rw_vaddr + 80}
     bss_size = 80 + lw.gsize
     a.bss_abs = bss_abs
@@ -1274,9 +1228,7 @@ def main():
         fh.write(elf)
     os.chmod(out, 0o755)
 
-
 def resolve_with_bss(a, arch):
-    """Patch fixups: rel branches target text; abs64/adr may target bss."""
     buf = a.buf
     for pos, label, kind in a.fixups:
         if label in a.bss_abs:
@@ -1309,13 +1261,11 @@ def resolve_with_bss(a, arch):
             raise SystemExit("internal: bad fixup %s" % kind)
     return bytes(buf)
 
-
 def usage():
     sys.stderr.write(
         "usage: mandela build --backend native <file.mnd> [-o out] "
         "[--arch x86-64|arm64]\n")
     sys.exit(2)
-
 
 if __name__ == "__main__":
     main()

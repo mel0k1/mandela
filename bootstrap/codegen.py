@@ -37,7 +37,7 @@ def c_str(s):
     return '"%s"' % "".join(out), len(raw)
 
 
-RUNTIME_C = r'''/* ---- Mandela runtime (v0.6) ---------------------------------- */
+RUNTIME_C = r'''/* ---- Mandela runtime (v0.5) ---------------------------------- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
